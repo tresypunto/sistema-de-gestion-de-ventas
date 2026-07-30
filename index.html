@@ -372,7 +372,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
    ========================================================= */
 
 /* ---------- Capa de datos en la NUBE (Firestore + tiempo real) ---------- */
-const STORES = ["products","sales","shifts","cashCloses","expenses","users","priceHistory","purchases","suppliers","combos","movimientos","ajustes","inversiones","perdidas","meta"];
+const STORES = ["products","sales","shifts","cashCloses","expenses","users","priceHistory","purchases","suppliers","combos","movimientos","ajustes","inversiones","perdidas","activos","meta"];
 const MIRROR = {}; STORES.forEach(s=>MIRROR[s]=[]);
 let _db=null, _auth=null, _ready=false;
 const _firstSnap={};
@@ -439,7 +439,7 @@ const APP = {
 };
 const ROLE_LABEL = {propietario:"Propietario",gerente:"Gerente",supervisor:"Supervisor",cajero:"Cajero"};
 const PAY_LABEL = {efectivo:"Efectivo",tarjeta:"Tarjeta",transferencia:"Transferencia",debito:"Débito",credito:"Crédito",mixto:"Mixto",fiado:"Fiado"};
-const PAY_OPTIONS = ["efectivo","tarjeta","transferencia","mixto"];
+const PAY_OPTIONS = ["efectivo","tarjeta","transferencia","credito","mixto"];
 const NAV = [
   {id:"dashboard", label:"Panel", ic:"▦", roles:["propietario","gerente","supervisor"]},
   {id:"pos",       label:"Punto de venta", ic:"🛒", roles:["propietario","gerente","supervisor","cajero"]},
@@ -455,8 +455,13 @@ const NAV = [
   {id:"turnos",    label:"Turnos", ic:"⏱", roles:["propietario","gerente","supervisor","cajero"]},
   {id:"caja",      label:"Cierre de caja", ic:"💵", roles:["propietario","gerente","supervisor","cajero"]},
   {id:"gastos",    label:"Gastos", ic:"🧾", roles:["propietario","gerente","supervisor"]},
+  {id:"ctacte",    label:"Cuenta corriente", ic:"👥", roles:["propietario","gerente","supervisor"]},
   {id:"inversiones",label:"Inversiones", ic:"💸", roles:["propietario","gerente"]},
-  {id:"reportes",  label:"Reportes", ic:"📊", roles:["propietario","gerente","supervisor"]},
+  {id:"activos",    label:"Activos fijos", ic:"🏢", roles:["propietario","gerente"]},
+  {id:"rep_general",   label:"Reportes generales", ic:"📊", roles:["propietario","gerente","supervisor"], grp:"reportes"},
+  {id:"rep_flujo",     label:"Flujo de fondos", ic:"💵", roles:["propietario","gerente"], grp:"reportes"},
+  {id:"rep_resultados",label:"Estado de resultados", ic:"📈", roles:["propietario","gerente"], grp:"reportes"},
+  {id:"rep_balance",   label:"Balance", ic:"⚖️", roles:["propietario","gerente"], grp:"reportes"},
   {id:"equipo",    label:"Mi equipo", ic:"🫂", roles:["propietario","gerente"]},
   {id:"usuarios",  label:"Usuarios", ic:"👥", roles:["propietario","gerente"]},
   {id:"backup",    label:"Respaldo", ic:"💾", roles:["propietario","gerente","supervisor"]},
@@ -488,6 +493,7 @@ async function seedIfEmpty(){
     {nombre:"Santiago",pin:"1111",rol:"cajero"},
     {nombre:"Facundo",pin:"1111",rol:"cajero"},
   ];
+  const _meta = await DB.all("meta"); const _noDemo=_meta.some(m=>m.id==="noDemoSeed");
   const users = await DB.all("users");
   const legacy = users.length===2 && users.some(u=>u.nombre==="Gerente") && users.some(u=>u.nombre==="Cajero/a");
   if(users.length===0 || legacy){
@@ -495,7 +501,7 @@ async function seedIfEmpty(){
     for(const u of DEFAULT_USERS) await DB.put("users",{id:uid(),...u});
   }
   const prods = await DB.all("products");
-  if(prods.length===0){
+  if(prods.length===0 && !_noDemo){
     const seed = [
       ["7790001","Fernet Branca 750ml","Bebidas con Alcohol","Fernet",4200,9500,18,6,30],
       ["7790002","Jägermeister 700ml","Bebidas con Alcohol","Jaggers",9800,21000,5,2,10],
@@ -517,7 +523,7 @@ async function seedIfEmpty(){
   const _pf=await DB.all("products");
   if(_pf.some(p=>p.foto!==undefined)){ for(const p of _pf){ if(p.foto!==undefined){ delete p.foto; await DB.put("products",p); } } }
   const combos=await DB.all("combos");
-  if(combos.length===0){
+  if(combos.length===0 && !_noDemo){
     const prods=await DB.all("products");
     const byName=n=>prods.find(p=>p.descripcion.includes(n));
     const fernet=byName("Fernet"), coca=byName("Coca"), quilmes=byName("Quilmes");
@@ -614,13 +620,64 @@ function openingModal(){
 /* =========================================================
    SHELL / NAV
    ========================================================= */
-const NAVGRP_LABEL={productos:{label:"Productos",ic:"📦"},proveedores:{label:"Proveedores",ic:"🤝"}};
+const NAVGRP_LABEL={productos:{label:"Productos",ic:"📦"},proveedores:{label:"Proveedores",ic:"🤝"},reportes:{label:"Reportes",ic:"📊"}};
 const NAVGRP_OPEN={productos:true};
 function mkNavLink(n){
   const a=document.createElement("a"); a.href="#"+n.id; a.dataset.page=n.id;
   a.innerHTML=`<span class="ic">${n.ic}</span> ${n.label}`;
   a.onclick=e=>{e.preventDefault(); go(n.id); $("side").classList.remove("open");};
   return a;
+}
+function logoutModal(){
+  const salir=()=>{ APP.user=null; APP.ownShift=false; $("app").classList.add("hidden"); $("login").classList.remove("hidden"); const pe=$("pin"); if(pe) pe.value=""; renderLogin(); };
+  if(!soyDuenoTurno()){
+    modal("Salir",`<div class="help">¿Querés salir del sistema?</div>`,[
+      {label:"Salir",cls:"btn",fn:c=>{ c(); salir(); }},
+      {label:"Cancelar",cls:"btn gray",fn:c=>c()}
+    ]);
+    return;
+  }
+  modal("Salir",`<div class="help">Tenés un <b>turno de caja abierto</b>. ¿Cómo querés salir?</div>`,[
+    {label:"Salir y cerrar turno",cls:"btn",fn:c=>{ c(); cerrarCajaModal(salir); }},
+    {label:"Salir sin cerrar turno",cls:"btn gray",fn:c=>{ c(); salir(); }},
+    {label:"Cancelar",cls:"btn gray",fn:c=>c()}
+  ]);
+}
+async function cerrarCajaModal(onDone){
+  const open=APP.openShift; if(!open){ if(onDone)onDone(); return; }
+  const sales=await DB.all("sales"), expenses=await DB.all("expenses"), purchases=await DB.all("purchases"), movs=await DB.all("movimientos");
+  const bx=shiftBoxes(open.id, sales, expenses, purchases, movs);
+  const iniF=open.montoInicialFisica||open.montoInicial||0;
+  const espF=Math.round((iniF+bx.ventasFisica+(bx.entradasFisica||0)-bx.egresosFisica)*100)/100;
+  modal("Cierre de caja del turno",`
+    <div class="help">Para cerrar el turno, contá la plata que hay en la caja y cargá el <b>monto real</b>. No se puede salir ni hacer otra cosa hasta completar esto.</div>
+    <div style="text-align:center;margin:12px 0 6px">
+      <div class="mini">Dinero esperado en caja</div>
+      <div style="font-size:46px;font-weight:800;color:var(--orange);line-height:1">${money(espF)}</div>
+    </div>
+    <div class="card" style="margin:8px 0"><div class="card-b flush"><table><tbody>
+      <tr><td>Inicial</td><td class="num">${money(iniF)}</td></tr>
+      <tr><td style="color:var(--ok)">+ Ventas en efectivo</td><td class="num" style="color:var(--ok)">${money(bx.ventasFisica)}</td></tr>
+      <tr><td style="color:var(--ok)">+ Entradas de efectivo</td><td class="num" style="color:var(--ok)">${money(bx.entradasFisica||0)}</td></tr>
+      <tr><td style="color:var(--bad)">− Egresos (gastos/pagos/retiros)</td><td class="num" style="color:var(--bad)">${money(bx.egresosFisica)}</td></tr>
+      <tr style="font-weight:800"><td>Esperado en caja</td><td class="num">${money(espF)}</td></tr>
+    </tbody></table></div></div>
+    <div class="field"><label>Dinero real contado en la caja</label><input id="cc_real" inputmode="decimal" placeholder="0" style="font-size:22px;text-align:center;font-weight:700"></div>
+    <div class="mini" id="cc_dif" style="text-align:center;font-size:15px;margin-top:2px"></div>
+    <div class="field" style="margin-top:10px"><label>Observaciones (opcional)</label><input id="cc_obs" placeholder="Opcional"></div>
+  `,[{label:"Confirmar cierre y salir",cls:"btn",fn:async close=>{
+    const rv=$("cc_real").value;
+    if(rv===""||rv==null){ toast("Cargá el dinero real contado en la caja","bad"); return; }
+    const real=parseNum(rv), dif=Math.round((real-espF)*100)/100;
+    await DB.put("cashCloses",{id:uid(),turnoId:open.id,fecha:new Date().toISOString(),espFisica:espF,realFisica:real,difFisica:dif,usuario:APP.user.id,obs:$("cc_obs").value.trim()});
+    const sh=await DB.get("shifts",open.id); if(sh){ sh.estado="cerrado"; sh.cierre=new Date().toISOString(); await DB.put("shifts",sh); }
+    await refreshState();
+    close(); toast("Turno cerrado","ok");
+    if(onDone) onDone();
+  }}],"wide");
+  $("cc_real").oninput=()=>{ const d=Math.round((parseNum($("cc_real").value)-espF)*100)/100; $("cc_dif").innerHTML=`Diferencia: <b style="color:${d===0?'var(--ok)':d<0?'var(--bad)':'var(--warn)'}">${money(d)}</b>`; };
+  const x=$("mX"); if(x) x.style.display="none";
+  setTimeout(()=>{ const el=$("cc_real"); if(el) el.focus(); },60);
 }
 function buildNav(){
   const nav=$("nav"); nav.innerHTML="";
@@ -656,7 +713,7 @@ async function go(page){
   const ni=NAV.find(n=>n.id===page);
   if(ni && APP.user && !ni.roles.includes(APP.user.rol)) page=landingPage();
   APP.page=page; setActive();
-  const titles={dashboard:"Panel",pos:"Punto de venta",inventario:"Catálogo",combos:"Promociones y Combos",compras:"Compras",ajustes:"Ajuste de inventario",auditoria:"Auditoría de Stock",perdidas:"Pérdidas",trazabilidad:"Trazabilidad",cuentas:"Cuentas por pagar",proveedores:"Proveedores",ventas:"Historial de ventas",turnos:"Turnos",caja:"Cierre de caja",gastos:"Gastos",inversiones:"Inversiones",reportes:"Reportes",equipo:"Mi equipo",usuarios:"Usuarios",backup:"Respaldo de datos"};
+  const titles={dashboard:"Panel",pos:"Punto de venta",inventario:"Catálogo",combos:"Promociones y Combos",compras:"Compras",ajustes:"Ajuste de inventario",auditoria:"Auditoría de Stock",perdidas:"Pérdidas",trazabilidad:"Trazabilidad",cuentas:"Cuentas por pagar",proveedores:"Proveedores",ventas:"Historial de ventas",turnos:"Turnos",caja:"Cierre de caja",gastos:"Gastos",ctacte:"Cuenta corriente del equipo",inversiones:"Inversiones",activos:"Activos fijos",rep_general:"Reportes generales",rep_flujo:"Flujo de fondos",rep_resultados:"Estado de resultados",rep_balance:"Balance",equipo:"Mi equipo",usuarios:"Usuarios",backup:"Respaldo de datos"};
   $("pageTitle").textContent=titles[page]||"";
   window.__usersCache = await DB.all("users");
   await refreshState(); updateTurnoState();
@@ -676,8 +733,13 @@ async function go(page){
   if(page==="turnos")     return viewTurnos(v);
   if(page==="caja")       return viewCaja(v);
   if(page==="gastos")     return viewGastos(v);
+  if(page==="ctacte")     return viewCtaCte(v);
+  if(page==="activos")    return viewActivos(v);
   if(page==="inversiones")return viewInversiones(v);
-  if(page==="reportes")   return viewReportes(v);
+  if(page==="rep_general")   return viewRepGeneral(v);
+  if(page==="rep_flujo")     return viewRepFlujo(v);
+  if(page==="rep_resultados")return viewRepResultados(v);
+  if(page==="rep_balance")   return viewRepBalance(v);
   if(page==="equipo")     return viewEquipo(v);
   if(page==="usuarios")   return viewUsuarios(v);
   if(page==="backup")     return viewBackup(v);
@@ -832,7 +894,7 @@ function viewPOS(v){
     });
   }
 }
-const POS={method:"efectivo",mixto:null,cliente:"",searchMode:"producto",_results:[],_idx:0,_scan:"",_scanT:0,_scanTimer:null};
+const POS={method:"efectivo",mixto:null,cliente:"",creditoUser:null,searchMode:"producto",_results:[],_idx:0,_scan:"",_scanT:0,_scanTimer:null};
 function bigAlert(msg,ms){
   let el=$("bigAlert");
   if(!el){ el=document.createElement("div"); el.id="bigAlert"; el.className="bigalert"; document.body.appendChild(el); }
@@ -1120,7 +1182,7 @@ function closeTicket(i){
   APP.activeTicket=idx; APP.cart=APP.tickets[APP.activeTicket].cart;
   renderCart();
 }
-const PAY_ICON={efectivo:"💵",tarjeta:"💳",transferencia:"🏦",mixto:"🧮"};
+const PAY_ICON={efectivo:"💵",tarjeta:"💳",transferencia:"🏦",credito:"🧾",mixto:"🧮"};
 function renderPayMethods(){
   const pm=$("payMethods"); if(!pm) return;
   pm.innerHTML=PAY_OPTIONS.map(k=>`<div class="pm ${POS.method===k?'sel':''}" data-pm="${k}"><div class="pmi">${PAY_ICON[k]||""}</div>${PAY_LABEL[k]}</div>`).join("");
@@ -1131,6 +1193,12 @@ function renderPayExtra(total){
   if(POS.method==="efectivo"){
     ex.innerHTML=`<div class="field" style="margin-top:14px"><label>Pagó con</label><input id="paga" inputmode="numeric" placeholder="${total}" style="font-size:20px;text-align:center;font-weight:700"></div><div class="mini" id="vuelto" style="text-align:center;font-size:15px;margin-top:2px"></div>`;
     const p=$("paga"); p.oninput=()=>{const v=(parseFloat(p.value)||0)-total; $("vuelto").innerHTML=v>=0?`Su cambio: <b>${money(v)}</b>`:`<span style="color:var(--bad)">Falta ${money(-v)}</span>`;};
+  } else if(POS.method==="credito"){
+    const users=(window.__usersCache||[]);
+    ex.innerHTML=`<div class="field" style="margin-top:14px"><label>¿A quién se le fía? (cuenta corriente del equipo)</label>
+      <div class="pay-methods" id="credUsers">${users.map(u=>`<div class="pm ${POS.creditoUser===u.id?'sel':''}" data-cu="${u.id}"><div class="pmi">👤</div>${esc(u.nombre)}</div>`).join("")}</div></div>
+      <div class="mini" style="margin-top:8px">Se suma a la cuenta corriente de esa persona. <b>No entra a la caja</b> hasta que liquide la deuda.</div>`;
+    ex.querySelectorAll("[data-cu]").forEach(n=>n.onclick=()=>{POS.creditoUser=n.dataset.cu; renderPayExtra(total);});
   } else if(POS.method==="mixto"){
     POS.mixto=POS.mixto||{efectivo:0,tarjeta:0,transferencia:0};
     ex.innerHTML=`<div class="row2">
@@ -1146,7 +1214,7 @@ function renderPayExtra(total){
 function checkoutModal(){
   if(!APP.cart.length){toast("Carrito vacío","bad");return;}
   const total=cartTotal();
-  POS.method="efectivo"; POS.mixto=null;
+  POS.method="efectivo"; POS.mixto=null; POS.creditoUser=null;
   modal("Cobrar",`
     <div class="checkout-total">${money(total)}</div>
     <div class="mini" style="text-align:center;margin:-4px 0 16px">${APP.cart.reduce((a,l)=>a+l.cant,0)} artículos</div>
@@ -1169,15 +1237,19 @@ async function doConfirmSale(){
     const m=POS.mixto||{}; const s=Object.values(m).reduce((a,b)=>a+(+b||0),0);
     if(Math.round(s)!==Math.round(total)){toast("El pago mixto no suma el total","bad");return false;}
     pagos=Object.entries(m).filter(([,v])=>+v>0).map(([metodo,monto])=>({metodo,monto:+monto}));
+  } else if(POS.method==="credito"){
+    if(!POS.creditoUser){ toast("Elegí a quién se le fía la venta","bad"); return false; }
+    pagos=[{metodo:"credito",monto:total}];
   } else {
     pagos=[{metodo:POS.method,monto:total}];
   }
   const cliente = "";
+  const creditoUser = POS.method==="credito"?POS.creditoUser:null;
 
   const items=APP.cart.map(l=>({tipo:l.tipo,refId:l.refId,codigo:l.codigo,desc:l.desc,cant:l.cant,precioUnit:l.precioUnit,costoUnit:l.costoUnit}));
   const costoTotal=items.reduce((a,it)=>a+it.costoUnit*it.cant,0);
   const stockMov=Object.entries(need).map(([productId,cant])=>({productId,cant}));
-  const sale={id:uid(),fecha:new Date().toISOString(),items,total,costoTotal,metodoPago:POS.method,pagos,cliente,usuario:APP.user.id,turnoId:APP.openShift.id,stockMov,anulada:false};
+  const sale={id:uid(),fecha:new Date().toISOString(),items,total,costoTotal,metodoPago:POS.method,pagos,cliente,creditoUser,usuario:APP.user.id,turnoId:APP.openShift.id,stockMov,anulada:false};
   await DB.put("sales",sale);
   for(const mv of stockMov){ const p=await DB.get("products",mv.productId); if(p){ p.stock-=mv.cant; await DB.put("products",p); } }
   await refreshState();
@@ -1189,7 +1261,7 @@ async function doConfirmSale(){
   } else {
     APP.cart=[]; if(APP.tickets&&APP.tickets[0]) APP.tickets[0].cart=APP.cart; APP.activeTicket=0;
   }
-  POS.method="efectivo"; POS.mixto=null; POS.cliente="";
+  POS.method="efectivo"; POS.mixto=null; POS.cliente=""; POS.creditoUser=null;
   toast("Venta registrada · "+money(total),"ok");
   scheduleBackup();
   renderCart();
@@ -2784,6 +2856,111 @@ async function movCajaHistorial(){
   if(esOwner){ $("mh_d1").onchange=render; $("mh_d2").onchange=render; }
   render();
 }
+async function viewCtaCte(v){
+  const users=await DB.all("users");
+  const sales=(await DB.all("sales")).filter(s=>!s.anulada && s.metodoPago==="credito" && s.creditoUser);
+  const liqs=(await DB.all("movimientos")).filter(m=>m.tipo==="entrada" && m.refUser);
+  const bal={};
+  users.forEach(u=>bal[u.id]={id:u.id,nombre:u.nombre,rol:u.rol,cargos:0,pagos:0,ventas:[]});
+  sales.forEach(s=>{ if(bal[s.creditoUser]){ bal[s.creditoUser].cargos+=s.total; bal[s.creditoUser].ventas.push(s); } });
+  liqs.forEach(m=>{ if(bal[m.refUser]) bal[m.refUser].pagos+=m.monto; });
+  const arr=Object.values(bal).map(b=>({...b,saldo:Math.round((b.cargos-b.pagos)*100)/100})).sort((a,b)=>b.saldo-a.saldo);
+  const totalDeuda=arr.reduce((a,b)=>a+Math.max(0,b.saldo),0);
+  v.innerHTML=`
+    <div class="help">Ventas fiadas al equipo. Cada persona tiene su cuenta corriente: se le suman las ventas a crédito y, cuando paga, <b>liquidás</b> la deuda (ese dinero entra a la caja).</div>
+    <div class="grid kpis"><div class="kpi"><div class="lab">Deuda total del equipo</div><div class="val" style="color:var(--bad)">${money(totalDeuda)}</div></div></div>
+    <div class="team-grid" style="margin-top:14px">
+      ${arr.map(b=>`<div class="card"><div class="card-b">
+        <div style="display:flex;justify-content:space-between;align-items:center"><b>${esc(b.nombre)}</b><span class="badge">${ROLE_LABEL[b.rol]||b.rol}</span></div>
+        <div style="font-size:30px;font-weight:800;color:${b.saldo>0?'var(--bad)':'var(--ok)'};margin:8px 0 2px">${money(b.saldo)}</div>
+        <div class="mini">Fiado ${money(b.cargos)} \u00b7 Pagado ${money(b.pagos)} \u00b7 ${b.ventas.length} venta(s)</div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn sm gray" data-det="${b.id}">Ver detalle</button>
+          ${b.saldo>0?`<button class="btn sm" data-liq="${b.id}">Liquidar</button>`:""}
+        </div>
+      </div>`).join("")}
+    </div>`;
+  v.querySelectorAll("[data-det]").forEach(n=>n.onclick=()=>ctaDetalle(bal[n.dataset.det]));
+  v.querySelectorAll("[data-liq]").forEach(n=>n.onclick=()=>ctaLiquidar(bal[n.dataset.liq]));
+}
+function ctaDetalle(b){
+  const saldo=Math.round((b.cargos-b.pagos)*100)/100;
+  const filas=b.ventas.slice().sort((x,y)=>(y.fecha||"").localeCompare(x.fecha||"")).map(s=>`<tr><td>${fmtDateTime(s.fecha)}</td><td class="num">${money(s.total)}</td></tr>`).join("")||`<tr><td colspan="2"><div class="empty">Sin ventas fiadas.</div></td></tr>`;
+  modal("Cuenta corriente \u00b7 "+esc(b.nombre),`
+    <div class="mini" style="margin-bottom:8px">Fiado ${money(b.cargos)} \u00b7 Pagado ${money(b.pagos)} \u00b7 <b>Saldo ${money(saldo)}</b></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th class="num">Venta</th></tr></thead><tbody>${filas}</tbody></table></div>
+  `,[{label:"Cerrar",cls:"btn gray",fn:c=>c()}]);
+}
+function ctaLiquidar(b){
+  const saldo=Math.round((b.cargos-b.pagos)*100)/100;
+  if(!APP.openShift){ toast("Abrí un turno para registrar el ingreso a caja","bad"); return; }
+  if(!soyDuenoTurno()){ toast("La caja la maneja quien tiene el turno abierto","bad"); return; }
+  modal("Liquidar cuenta de "+esc(b.nombre),`
+    <div class="help">El dinero cobrado entra a la <b>caja</b> como ingreso de efectivo.</div>
+    <div class="mini">Saldo actual: <b>${money(saldo)}</b></div>
+    <div class="field" style="margin-top:8px"><label>Monto a liquidar</label><input id="liq_m" inputmode="decimal" value="${Math.round(saldo)}" style="font-size:20px;text-align:center;font-weight:700"></div>
+  `,[{label:"Confirmar y cobrar",cls:"btn",fn:async close=>{
+    const m=parseNum($("liq_m").value);
+    if(!(m>0)){ toast("Poné un monto válido","bad"); return; }
+    if(m>saldo+0.5){ if(!confirm("El monto es mayor al saldo. ¿Continuar igual?")) return; }
+    await DB.put("movimientos",{id:uid(),tipo:"entrada",monto:Math.round(m*100)/100,motivo:"Liquidación cuenta corriente \u00b7 "+b.nombre,refUser:b.id,fecha:new Date().toISOString(),usuario:APP.user.id,turnoId:APP.openShift.id});
+    await refreshState(); close(); toast("Liquidación registrada \u00b7 entró "+money(m)+" a la caja","ok"); go("ctacte");
+  }}]);
+}
+async function viewActivos(v){
+  if(APP.user.rol!=="propietario" && APP.user.rol!=="gerente"){ v.innerHTML=`<div class="help">Solo propietarios o gerentes pueden ver Activos fijos.</div>`; return; }
+  const list=(await DB.all("activos")).sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
+  const totalPropio=list.filter(a=>a.propiedad!=="Comodato").reduce((s,a)=>s+(+a.costo||0)*(+a.cantidad||1),0);
+  const comodato=list.filter(a=>a.propiedad==="Comodato").length;
+  v.innerHTML=`
+    <div class="help">Registro de activos fijos. Se alimenta de tus inversiones en activos y podés <b>editar, agregar o borrar</b> filas si hay algún dato mal.</div>
+    <div class="grid kpis">
+      <div class="kpi"><div class="lab">Inversión en activos propios</div><div class="val">${money(totalPropio)}</div></div>
+      <div class="kpi"><div class="lab">Cantidad de activos</div><div class="val">${list.length}</div></div>
+      <div class="kpi"><div class="lab">En comodato</div><div class="val">${comodato}</div></div>
+    </div>
+    <div class="toolbar" style="margin-top:12px"><button class="btn" id="addAct">+ Agregar activo</button></div>
+    <div class="card"><div class="card-b flush"><div class="tbl-wrap"><table>
+      <thead><tr><th>Concepto</th><th class="num">Cant.</th><th>Propiedad</th><th>Categoría</th><th class="num">Vida útil</th><th class="num">Costo</th><th>Fecha</th><th></th></tr></thead>
+      <tbody>${list.map(a=>`<tr>
+        <td><b>${esc(a.concepto)}</b></td>
+        <td class="num">${a.cantidad||1}</td>
+        <td>${esc(a.propiedad||"—")}</td>
+        <td>${esc(a.categoria||"—")}</td>
+        <td class="num">${a.vidaUtil?a.vidaUtil+" años":"—"}</td>
+        <td class="num">${a.costo?money(a.costo):"—"}</td>
+        <td class="mini">${a.fecha?new Date(a.fecha).toLocaleDateString("es-AR"):"—"}</td>
+        <td class="right"><button class="btn sm gray" data-ed="${a.id}">Editar</button> <button class="btn sm gray" data-del="${a.id}">✕</button></td>
+      </tr>`).join("")||`<tr><td colspan="8"><div class="empty">Todavía no hay activos cargados.</div></td></tr>`}</tbody>
+    </table></div></div></div>`;
+  $("addAct").onclick=()=>activoModal(null);
+  v.querySelectorAll("[data-ed]").forEach(n=>n.onclick=()=>activoModal(list.find(a=>a.id===n.dataset.ed)));
+  v.querySelectorAll("[data-del]").forEach(n=>n.onclick=async()=>{ const a=list.find(x=>x.id===n.dataset.del); if(confirm(`¿Borrar el activo "${a.concepto}"?`)){ await DB.del("activos",a.id); await refreshState(); toast("Activo borrado","ok"); go("activos"); } });
+}
+function activoModal(a){
+  const e=a||{};
+  modal(a?"Editar activo":"Agregar activo",`
+    <div class="field"><label>Concepto</label><input id="ac_c" value="${esc(e.concepto||"")}" placeholder="Ej: Heladera Inelro 450L"></div>
+    <div class="row2">
+      <div class="field"><label>Cantidad</label><input id="ac_q" inputmode="numeric" value="${e.cantidad||1}"></div>
+      <div class="field"><label>Propiedad</label><select id="ac_p"><option ${e.propiedad!=="Comodato"?"selected":""}>Propio</option><option ${e.propiedad==="Comodato"?"selected":""}>Comodato</option></select></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Categoría</label><input id="ac_cat" value="${esc(e.categoria||"")}" placeholder="Maquinaria, Mobiliario, Tecnología…"></div>
+      <div class="field"><label>Años de vida útil</label><input id="ac_v" inputmode="numeric" value="${e.vidaUtil||""}"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Costo</label><input id="ac_costo" inputmode="decimal" value="${e.costo||""}"></div>
+      <div class="field"><label>Fecha</label><input type="date" id="ac_f" value="${e.fecha?e.fecha.slice(0,10):todayStr()}"></div>
+    </div>
+  `,[{label:a?"Guardar cambios":"Agregar",cls:"btn",fn:async close=>{
+    const c=$("ac_c").value.trim(); if(!c){ toast("Poné un concepto","bad"); return; }
+    const obj={id:a?a.id:uid(),concepto:c,cantidad:parseNum($("ac_q").value)||1,propiedad:$("ac_p").value,
+      categoria:$("ac_cat").value.trim(),vidaUtil:parseNum($("ac_v").value)||0,costo:parseNum($("ac_costo").value)||0,
+      fecha:($("ac_f").value?$("ac_f").value+"T12:00:00.000Z":new Date().toISOString())};
+    await DB.put("activos",obj); await refreshState(); close(); toast(a?"Activo actualizado":"Activo agregado","ok"); go("activos");
+  }}]);
+}
 async function viewTrazabilidad(v){
   if(APP.user.rol!=="propietario"){ v.innerHTML=`<div class="help">Solo los <b>propietarios</b> pueden acceder a Trazabilidad.</div>`; return; }
   v.innerHTML=`
@@ -2949,6 +3126,174 @@ async function trazVariaciones(v){
     pintar(c.nombre, pts);
   }
 }
+const MESES_R=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+function _mesIdx(fecha,anio){ const s=String(fecha||""); if(s.slice(0,4)!==String(anio)) return -1; const m=parseInt(s.slice(5,7),10); return (m>=1&&m<=12)?m-1:-1; }
+function _yearsData(...lists){ const ys=new Set([String(new Date().getFullYear())]); lists.forEach(L=>L.forEach(x=>{ const y=String(x.fecha||x.paidFecha||"").slice(0,4); if(y) ys.add(y); })); return [...ys].filter(Boolean).sort().reverse(); }
+function matrizMensual(titulo, filas){
+  const cell=n=> (!n||Math.round(n)===0)?'<span style="color:#cfc8bf">—</span>':money(Math.round(n));
+  const head=`<tr><th style="text-align:left;position:sticky;left:0;background:#faf7f3;min-width:210px;z-index:2">${esc(titulo)}</th>${MESES_R.map(m=>`<th class="num">${m}</th>`).join("")}<th class="num" style="background:#efe9e1">Total</th></tr>`;
+  const rows=filas.map(f=>{
+    if(f.tipo==="header") return `<tr><td colspan="14" style="position:sticky;left:0;background:#efe9e1;font-weight:800;text-transform:uppercase;font-size:10.5px;letter-spacing:.04em;color:#8a7f70;padding-top:9px">${esc(f.label)}</td></tr>`;
+    const data=f.data||[]; const tot=data.reduce((a,b)=>a+b,0);
+    const isTot=f.tipo==="total"; const bg=isTot?"#faf7f3":"#fff";
+    const col=f.color?("color:"+f.color+";"):""; const fw=isTot||f.tipo==="sub"?"font-weight:800;":"";
+    return `<tr style="${isTot?'background:#faf7f3;':''}"><td style="position:sticky;left:0;background:${bg};${fw}${col};z-index:1">${esc(f.label)}</td>${data.map(n=>`<td class="num" style="${fw}${col}">${cell(n)}</td>`).join("")}<td class="num" style="font-weight:800;${col}background:#f7f4ef">${cell(tot)}</td></tr>`;
+  }).join("");
+  return `<div class="card"><div class="card-b flush"><div class="tbl-wrap" style="overflow:auto"><table style="font-size:12.5px;white-space:nowrap;min-width:900px">${head}${rows}</table></div></div></div>`;
+}
+async function viewRepGeneral(v){
+  const sales=(await DB.all("sales")).filter(s=>!s.anulada);
+  const expenses=await DB.all("expenses");
+  const today=todayStr();
+  v.innerHTML=`
+    <div class="toolbar"><div class="field" style="margin:0"><label>Desde</label><input type="date" id="rg_d1" value="${today.slice(0,8)+'01'}"></div>
+    <div class="field" style="margin:0"><label>Hasta</label><input type="date" id="rg_d2" value="${today}"></div></div>
+    <div id="rg_out"></div>`;
+  const COLM={efectivo:"#27AE60",tarjeta:"#2E86DE",transferencia:"#F5A623",mixto:"#8E44AD",debito:"#16A085",credito:"#E74C3C",fiado:"#95A5A6"};
+  const render=()=>{
+    const d1=$("rg_d1").value, d2=$("rg_d2").value;
+    const inR=f=>{ const dd=String(f||"").slice(0,10); return dd>=d1 && dd<=d2; };
+    const sv=sales.filter(s=>inR(s.fecha)), ex=expenses.filter(e=>inR(e.fecha));
+    const ventas=sv.reduce((a,s)=>a+s.total,0), cmv=sv.reduce((a,s)=>a+(s.costoTotal||0),0);
+    const margen=ventas-cmv, gastos=ex.reduce((a,e)=>a+e.monto,0), neto=margen-gastos;
+    const nV=sv.length, ticket=nV?ventas/nV:0;
+    const porMet={}; sv.forEach(s=>{ (s.pagos&&s.pagos.length?s.pagos:[{metodo:s.metodoPago,monto:s.total}]).forEach(p=>{ porMet[p.metodo]=(porMet[p.metodo]||0)+p.monto; }); });
+    const totPag=Object.values(porMet).reduce((a,b)=>a+b,0)||1;
+    const segs=Object.entries(porMet).map(([k,val])=>({label:PAY_LABEL[k]||k,value:val,color:COLM[k]||"#888"})).filter(s=>s.value>0);
+    const prodMap={}; sv.forEach(s=>{ (s.stockMov||[]).forEach(m=>{ prodMap[m.productId]=(prodMap[m.productId]||0)+m.cant; }); });
+    const tops=Object.entries(prodMap).map(([id,cant])=>{ const p=APP.products.find(x=>x.id===id); return {nombre:p?p.descripcion:"(borrado)",cant}; }).sort((a,b)=>b.cant-a.cant).slice(0,10);
+    $("rg_out").innerHTML=`
+      <div class="grid kpis">
+        <div class="kpi cel"><div class="lab">Ventas</div><div class="val">${money(ventas)}</div><div class="sub">${nV} ventas</div></div>
+        <div class="kpi ok"><div class="lab">Margen bruto</div><div class="val" style="color:var(--ok)">${money(margen)}</div><div class="sub">${ventas?(margen/ventas*100).toFixed(1):0}% s/ ventas</div></div>
+        <div class="kpi bad"><div class="lab">Gastos</div><div class="val" style="color:var(--bad)">${money(gastos)}</div></div>
+        <div class="kpi"><div class="lab">Resultado neto</div><div class="val" style="color:${neto>=0?'var(--ok)':'var(--bad)'}">${money(neto)}</div></div>
+      </div>
+      <div class="grid kpis" style="margin-top:2px">
+        <div class="kpi"><div class="lab">Venta promedio</div><div class="val">${money(ticket)}</div><div class="sub">por ticket</div></div>
+        <div class="kpi"><div class="lab">CMV</div><div class="val">${money(cmv)}</div><div class="sub">costo mercadería vendida</div></div>
+        <div class="kpi"><div class="lab">Nº de ventas</div><div class="val">${nV}</div></div>
+      </div>
+      <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;align-items:start">
+        <div class="card"><div class="card-h"><h3>Medios de pago</h3></div><div class="card-b" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;justify-content:center">
+          ${segs.length?svgDonut(segs):`<div class="empty">Sin ventas en el período.</div>`}
+          <table style="flex:1;min-width:170px"><tbody>${segs.map(s=>`<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${s.color};margin-right:7px"></span>${esc(s.label)}</td><td class="num">${money(s.value)}</td><td class="num mini">${(s.value/totPag*100).toFixed(0)}%</td></tr>`).join("")}</tbody></table>
+        </div></div>
+        <div class="card"><div class="card-h"><h3>Productos más vendidos</h3></div><div class="card-b flush"><div class="tbl-wrap"><table>
+          <thead><tr><th>Producto</th><th class="num">Unidades</th></tr></thead><tbody>
+          ${tops.map(t=>`<tr><td>${esc(t.nombre)}</td><td class="num" style="font-weight:700">${t.cant}</td></tr>`).join("")||`<tr><td colspan="2"><div class="empty">Sin ventas.</div></td></tr>`}
+        </tbody></table></div></div></div>
+      </div>`;
+  };
+  $("rg_d1").onchange=render; $("rg_d2").onchange=render; render();
+}
+async function viewRepFlujo(v){
+  const sales=(await DB.all("sales")).filter(s=>!s.anulada);
+  const expenses=await DB.all("expenses"), purchases=await DB.all("purchases"), movs=await DB.all("movimientos"), inversiones=await DB.all("inversiones");
+  const years=_yearsData(sales,expenses,purchases,movs,inversiones);
+  v.innerHTML=`<div class="help">Flujo de fondos mensual (base <b>caja</b>: entradas y salidas reales de dinero). Ordenado por actividad. Filtrá el año y mirá los 12 meses uno al lado del otro.</div>
+    <div class="toolbar"><div class="field" style="margin:0"><label>Año</label><select id="ff_y">${years.map(y=>`<option>${y}</option>`).join("")}</select></div></div><div id="ff_out"></div>`;
+  const render=()=>{
+    const Y=$("ff_y").value, mi=f=>_mesIdx(f,Y), z=()=>Array(12).fill(0);
+    const ventasEfe=z(), ventasEle=z(), entradas=z(), comprasPag=z(), gastosFijos=z(), gastosVar=z(), pagosProv=z(), salidas=z(), invers=z();
+    sales.forEach(s=>{ const m=mi(s.fecha); if(m<0)return; (s.pagos&&s.pagos.length?s.pagos:[{metodo:s.metodoPago,monto:s.total}]).forEach(p=>{ if(p.metodo==="efectivo") ventasEfe[m]+=p.monto; else ventasEle[m]+=p.monto; }); });
+    movs.forEach(x=>{ const m=mi(x.fecha); if(m<0)return; if(x.tipo==="entrada") entradas[m]+=x.monto; else salidas[m]+=x.monto; });
+    purchases.forEach(c=>{ if(c.formaPago==="contado"){ const m=mi(c.fecha); if(m>=0) comprasPag[m]+=(c.total||0); } else if(c.pagada){ const m=mi(c.paidFecha||c.fecha); if(m>=0) pagosProv[m]+=(c.total||0); } });
+    expenses.forEach(e=>{ const m=mi(e.fecha); if(m<0)return; if(e.tipo==="fijo") gastosFijos[m]+=e.monto; else gastosVar[m]+=e.monto; });
+    inversiones.forEach(x=>{ const m=mi(x.fecha); if(m>=0) invers[m]+=x.monto; });
+    const totIng=z().map((_,m)=>ventasEfe[m]+ventasEle[m]+entradas[m]);
+    const totEgr=z().map((_,m)=>comprasPag[m]+gastosFijos[m]+gastosVar[m]+pagosProv[m]+salidas[m]);
+    const flujoOp=z().map((_,m)=>totIng[m]-totEgr[m]);
+    const flujoNeto=z().map((_,m)=>flujoOp[m]-invers[m]);
+    let ac=0; const acum=flujoNeto.map(x=>{ ac+=x; return ac; });
+    const filas=[
+      {tipo:"header",label:"Ingresos"},
+      {label:"Ventas en efectivo",data:ventasEfe},
+      {label:"Ventas tarjeta / transferencia",data:ventasEle},
+      {label:"Entradas de efectivo (caja)",data:entradas},
+      {tipo:"total",label:"Total ingresos",data:totIng,color:"#1f8a48"},
+      {tipo:"header",label:"Egresos operativos"},
+      {label:"Compras de mercadería (contado)",data:comprasPag},
+      {label:"Pagos a proveedores (crédito)",data:pagosProv},
+      {label:"Gastos fijos",data:gastosFijos},
+      {label:"Gastos variables",data:gastosVar},
+      {label:"Salidas de efectivo (caja)",data:salidas},
+      {tipo:"total",label:"Total egresos operativos",data:totEgr,color:"#c0392b"},
+      {tipo:"total",label:"Flujo operativo",data:flujoOp,color:"#2E86DE"},
+      {tipo:"header",label:"Inversiones"},
+      {label:"Inversiones (acciones, cripto, plazo fijo…)",data:invers},
+      {tipo:"total",label:"Flujo neto del mes",data:flujoNeto},
+      {tipo:"total",label:"Flujo acumulado",data:acum,color:"#8E44AD"},
+    ];
+    $("ff_out").innerHTML=matrizMensual("Concepto / mes ("+Y+")",filas);
+  };
+  $("ff_y").onchange=render; render();
+}
+async function viewRepResultados(v){
+  const sales=(await DB.all("sales")).filter(s=>!s.anulada);
+  const expenses=await DB.all("expenses"), perdidas=await DB.all("perdidas");
+  const years=_yearsData(sales,expenses,perdidas);
+  v.innerHTML=`<div class="help">Estado de resultados mensual (base <b>devengado</b>): la ganancia real del negocio. Usa el <b>CMV</b> (costo de lo vendido), no las compras. Las inversiones no son gasto, no entran acá.</div>
+    <div class="toolbar"><div class="field" style="margin:0"><label>Año</label><select id="er_y">${years.map(y=>`<option>${y}</option>`).join("")}</select></div></div><div id="er_out"></div>`;
+  const render=()=>{
+    const Y=$("er_y").value, mi=f=>_mesIdx(f,Y), z=()=>Array(12).fill(0);
+    const ventas=z(), cmv=z(), gAdm=z(), gCom=z(), gMan=z(), perd=z();
+    sales.forEach(s=>{ const m=mi(s.fecha); if(m<0)return; ventas[m]+=s.total; cmv[m]+=(s.costoTotal||0); });
+    expenses.forEach(e=>{ const m=mi(e.fecha); if(m<0)return; const g=grupoGasto(e.categoria); if(g==="Comerciales")gCom[m]+=e.monto; else if(g==="Mantenimiento")gMan[m]+=e.monto; else gAdm[m]+=e.monto; });
+    perdidas.forEach(x=>{ const m=mi(x.fecha); if(m>=0) perd[m]+=(x.cantidad||0)*(x.costoUnit||0); });
+    const margen=z().map((_,m)=>ventas[m]-cmv[m]);
+    const totGastos=z().map((_,m)=>gAdm[m]+gCom[m]+gMan[m]);
+    const resOp=z().map((_,m)=>margen[m]-totGastos[m]);
+    const resNeto=z().map((_,m)=>resOp[m]-perd[m]);
+    const filas=[
+      {label:"Ventas",data:ventas},
+      {label:"(−) CMV (costo de lo vendido)",data:cmv.map(x=>-x),color:"#c0392b"},
+      {tipo:"total",label:"= Margen bruto",data:margen,color:"#1f8a48"},
+      {tipo:"header",label:"Gastos operativos"},
+      {label:"Administrativos",data:gAdm.map(x=>-x)},
+      {label:"Comerciales",data:gCom.map(x=>-x)},
+      {label:"Mantenimiento",data:gMan.map(x=>-x)},
+      {tipo:"total",label:"= Resultado operativo",data:resOp,color:"#2E86DE"},
+      {label:"(−) Pérdidas de inventario",data:perd.map(x=>-x),color:"#c0392b"},
+      {tipo:"total",label:"= Resultado neto",data:resNeto,color:"#8E44AD"},
+    ];
+    $("er_out").innerHTML=matrizMensual("Concepto / mes ("+Y+")",filas);
+  };
+  $("er_y").onchange=render; render();
+}
+async function viewRepBalance(v){
+  const products=APP.products;
+  const purchases=await DB.all("purchases"), inversiones=await DB.all("inversiones");
+  const sales=(await DB.all("sales")).filter(s=>!s.anulada), expenses=await DB.all("expenses"), movs=await DB.all("movimientos");
+  const invValor=products.reduce((a,p)=>a+(p.stock*(p.costoProm||0)),0);
+  const invTotal=inversiones.reduce((a,x)=>a+(x.monto||0),0);
+  const cxp=purchases.filter(c=>c.formaPago==="credito"&&!c.pagada).reduce((a,c)=>a+(c.total||0),0);
+  let efe=0;
+  sales.forEach(s=>{ (s.pagos&&s.pagos.length?s.pagos:[{metodo:s.metodoPago,monto:s.total}]).forEach(p=>{ if(p.metodo==="efectivo") efe+=p.monto; }); });
+  movs.forEach(x=>{ if(x.tipo==="entrada") efe+=(x.monto||0); else efe-=(x.monto||0); });
+  expenses.forEach(e=>{ efe-=(e.monto||0); });
+  purchases.forEach(c=>{ if(c.formaPago==="contado") efe-=(c.total||0); else if(c.pagada) efe-=(c.total||0); });
+  efe=Math.round(efe);
+  const activo=efe+invValor+invTotal;
+  const patrimonio=activo-cxp;
+  const row=(l,val,opts)=>`<tr style="${opts&&opts.tot?'font-weight:800;background:#faf7f3':''}"><td style="${opts&&opts.col?'color:'+opts.col:''}">${esc(l)}</td><td class="num" style="${opts&&opts.col?'color:'+opts.col+';':''}${opts&&opts.tot?'font-weight:800':''}">${money(Math.round(val))}</td></tr>`;
+  v.innerHTML=`
+    <div class="help">Balance <b>al día de hoy</b> (foto del momento): qué tiene y qué debe el negocio. Se calcula solo con lo cargado en el sistema.</div>
+    <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;align-items:start">
+      <div class="card"><div class="card-h"><h3>Activo (lo que tiene)</h3></div><div class="card-b flush"><div class="tbl-wrap"><table><tbody>
+        ${row("Efectivo operativo (estimado)",efe)}
+        ${row("Inventario valorizado (stock × costo)",invValor)}
+        ${row("Inversiones",invTotal)}
+        ${row("Total activo",activo,{tot:true,col:"#1f8a48"})}
+      </tbody></table></div></div></div>
+      <div class="card"><div class="card-h"><h3>Pasivo y patrimonio</h3></div><div class="card-b flush"><div class="tbl-wrap"><table><tbody>
+        ${row("Cuentas por pagar (proveedores)",cxp,{col:"#c0392b"})}
+        ${row("Total pasivo",cxp,{tot:true,col:"#c0392b"})}
+        ${row("Patrimonio neto (activo − pasivo)",patrimonio,{tot:true,col:"#8E44AD"})}
+      </tbody></table></div></div></div>
+    </div>
+    <div class="help" style="margin-top:14px;background:#fdf6ec;border-color:#f0dcae;color:#8a6d1e">Aclaración honesta: el <b>efectivo</b> es una estimación del acumulado histórico de caja (no incluye aportes de capital ni retiros que no hayas registrado). Las <b>inversiones</b> figuran como activo aparte: si salieron de la caja del negocio, no lo cuentes doble. Para un balance contable formal harían falta más datos (capital, amortizaciones), pero esta foto ya te sirve para ver patrimonio, deuda e inventario.</div>`;
+}
 async function viewBackup(v){
   const counts={};
   for(const s of DB.STORES) counts[s]=(await DB.all(s)).length;
@@ -3022,11 +3367,16 @@ async function viewBackup(v){
   };
   if($("delAll")) $("delAll").onclick=async()=>{
     if(!_chkPass()) return;
-    if(!confirm("Vas a borrar TODO (productos, combos, proveedores y todas las transacciones). Los usuarios se conservan. Esta acción NO se puede deshacer. ¿Continuar?")) return;
-    if(!confirm("Confirmación final: ¿seguro que querés borrar todos los datos?")) return;
-    const keep={users:1,meta:1};
-    for(const s of DB.STORES){ if(!keep[s]) await DB.clear(s); }
-    await refreshState(); buildNav(); toast("Todos los datos fueron borrados","ok"); go("dashboard");
+    if(!confirm("Vas a borrar ABSOLUTAMENTE TODO y dejar el sistema como nuevo: productos, ventas, compras, caja, gastos, inversiones y todo lo cargado. Esta acción NO se puede deshacer. ¿Continuar?")) return;
+    if(!confirm("Confirmación final: ¿borrar todo y empezar de cero?")) return;
+    const btn=$("delAll"); if(btn){ btn.disabled=true; btn.textContent="Borrando todo…"; }
+    try{
+      for(const s of DB.STORES){ await DB.clear(s); }
+      await DB.put("meta",{id:"noDemoSeed",v:1});
+      if(typeof _db!=="undefined" && _db){ try{ await _db.collection("meta").doc("noDemoSeed").set({id:"noDemoSeed",v:1}); }catch(e){} }
+      toast("Todo borrado. Reiniciando en limpio…","ok");
+      setTimeout(()=>location.reload(), 1200);
+    }catch(e){ toast("Error al borrar: "+(e.message||e),"bad"); if(btn){ btn.disabled=false; btn.textContent="🗑 Borrar TODOS los datos"; } }
   };
 }
 
@@ -3144,7 +3494,7 @@ function authMsg(e){
    ========================================================= */
 $("loginBtn").onclick=doLogin;
 $("pin").addEventListener("keydown",e=>{if(e.key==="Enter")doLogin();});
-$("logoutBtn").onclick=()=>{APP.user=null;$("app").classList.add("hidden");$("login").classList.remove("hidden");$("pin").value="";renderLogin();};
+$("logoutBtn").onclick=logoutModal;
 $("menuToggle").onclick=()=>$("side").classList.toggle("open");
 function checkMobile(){$("menuToggle").style.display=window.innerWidth<=880?"inline-block":"none";}
 window.addEventListener("resize",checkMobile);
