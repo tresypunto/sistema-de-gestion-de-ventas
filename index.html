@@ -485,6 +485,22 @@ function shiftBoxes(turnoId, sales, expenses, purchases, movs){
 }
 
 /* ---------- Seed ---------- */
+async function _nukeCollection(name){
+  if(typeof _db!=="undefined" && _db){
+    for(let i=0;i<12;i++){
+      let snap;
+      try{ snap=await _db.collection(name).get({source:"server"}); }
+      catch(e){ try{ snap=await _db.collection(name).get(); }catch(e2){ break; } }
+      if(snap.empty){ if(typeof MIRROR!=="undefined") MIRROR[name]=[]; return; }
+      let b=_db.batch(),n=0;
+      for(const d of snap.docs){ b.delete(d.ref); if(++n>=400){ await b.commit(); b=_db.batch(); n=0; } }
+      if(n>0) await b.commit();
+    }
+    if(typeof MIRROR!=="undefined") MIRROR[name]=[];
+  } else {
+    await DB.clear(name);
+  }
+}
 async function seedIfEmpty(){
   const DEFAULT_USERS=[
     {nombre:"Luciano",pin:"1234",rol:"propietario"},
@@ -1768,22 +1784,71 @@ function anularVenta(sale,closeDetail){
    COMPRAS (recalculo de costo promedio)
    ========================================================= */
 async function viewCompras(v){
-  const purchases=(await DB.all("purchases")).sort((a,b)=>b.fecha.localeCompare(a.fecha)).slice(0,30);
+  const purchases=(await DB.all("purchases")).sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
   const suppliers=await DB.all("suppliers");
   v.innerHTML=`
-    <div class="help">Al registrar una compra, el sistema <b>recalcula el costo promedio</b> de cada producto:
-    <i>nuevo costo = (stock·costo_actual + cantidad·costo_compra) / (stock + cantidad)</i>, suma el stock y te muestra la ganancia resultante.</div>
-    <button class="btn" id="newPurchase">+ Registrar compra</button>
-    <div class="card" style="margin-top:16px"><div class="card-h"><h3>Últimas compras</h3></div>
-    <div class="card-b flush"><div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Proveedor</th><th class="num">Ítems</th><th class="num">Total</th><th>Pago</th><th>Usuario</th><th></th></tr></thead><tbody>
-    ${purchases.map(c=>`<tr><td>${fmtDateTime(c.fecha)}</td><td>${esc(c.proveedorNombre||c.proveedor||"—")}</td><td class="num">${c.items.length}</td><td class="num">${money(purchaseTotal(c))}</td><td>${c.formaPago==="credito"?(c.pagada?'<span class="badge ok">crédito · pagada</span>':'<span class="badge warn">crédito</span>'):'<span class="badge cel">contado</span>'}</td><td class="mini">${esc(userName(c.usuario))}</td><td class="right"><button class="btn sm gray" data-editp="${c.id}">Editar</button></td></tr>`).join("")||`<tr><td colspan="7"><div class="empty">Sin compras registradas.</div></td></tr>`}
-    </tbody></table></div></div></div>`;
+    <div class="help">Al registrar una compra con productos, el sistema <b>recalcula el costo promedio</b> de cada uno. Abajo tenés el <b>historial completo</b>; podés editar cualquier fila si hay un dato mal.</div>
+    <div class="toolbar">
+      <div class="search"><input id="compSearch" placeholder="Buscar por proveedor…"></div>
+      <button class="btn" id="newPurchase">+ Registrar compra</button>
+    </div>
+    <div class="mini" id="compCount" style="margin:4px 2px 10px"></div>
+    <div class="card"><div class="card-b flush"><div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Proveedor</th><th class="num">Total</th><th>Pago</th><th>Usuario</th><th></th></tr></thead><tbody id="compBody"></tbody></table></div></div></div>`;
+  function draw(){
+    const q=($("compSearch").value||"").toLowerCase().trim();
+    let list=purchases;
+    if(q) list=list.filter(c=>String(c.proveedorNombre||c.proveedor||"").toLowerCase().includes(q));
+    $("compCount").textContent=`${list.length} compra${list.length!==1?"s":""}`+(q?" (filtradas)":"");
+    $("compBody").innerHTML=list.map(c=>`<tr>
+      <td>${c.fecha?fmtDateTime(c.fecha):"—"}</td>
+      <td>${esc(c.proveedorNombre||c.proveedor||"—")}</td>
+      <td class="num">${money(purchaseTotal(c))}</td>
+      <td>${c.formaPago==="credito"?(c.pagada?'<span class="badge ok">crédito · pagada</span>':'<span class="badge warn">crédito · a pagar</span>'):'<span class="badge cel">contado</span>'}</td>
+      <td class="mini">${esc(userName(c.usuario))}</td>
+      <td class="right"><button class="btn sm gray" data-editp="${c.id}">Editar</button></td>
+    </tr>`).join("")||`<tr><td colspan="6"><div class="empty">Sin compras.</div></td></tr>`;
+    $("compBody").querySelectorAll("[data-editp]").forEach(b=>b.onclick=()=>{ const c=purchases.find(x=>x.id===b.dataset.editp); if(c.items&&c.items.length>0) editPurchaseModal(c); else editPurchaseSimple(c,suppliers); });
+  }
   if(!window.__purchaseListener){
     window.__purchaseListener=true;
     window.addEventListener("message", async e=>{ if(e && e.data && e.data.__purchase){ await applyPurchase(e.data.data); } });
   }
+  $("compSearch").oninput=draw; draw();
   $("newPurchase").onclick=()=>openPurchaseWindow(suppliers);
-  v.querySelectorAll("[data-editp]").forEach(b=>b.onclick=()=>editPurchaseModal(purchases.find(c=>c.id===b.dataset.editp)));
+}
+function editPurchaseSimple(c, suppliers){
+  const opts=(suppliers||[]).slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  const fechaVal=(c.fecha||"").slice(0,10);
+  const vencVal=(c.vencimiento||"").slice(0,10);
+  modal("Editar compra",`
+    <div class="row2">
+      <div class="field"><label>Fecha</label><input type="date" id="ep_f" value="${fechaVal}"></div>
+      <div class="field"><label>Proveedor</label><input id="ep_prov" list="ep_provs" value="${esc(c.proveedorNombre||"")}"><datalist id="ep_provs">${opts.map(s=>`<option value="${esc(s.nombre)}"></option>`).join("")}</datalist></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Monto ($)</label><input id="ep_monto" inputmode="decimal" value="${c.total||c.subtotal||0}"></div>
+      <div class="field"><label>Forma de pago</label><select id="ep_forma"><option value="contado" ${c.formaPago!=="credito"?"selected":""}>Contado</option><option value="credito" ${c.formaPago==="credito"?"selected":""}>Crédito</option></select></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Fecha de pago / vencimiento</label><input type="date" id="ep_venc" value="${vencVal}"></div>
+      <div class="field"><label>¿Pagada?</label><select id="ep_pag"><option value="si" ${c.pagada?"selected":""}>Sí</option><option value="no" ${!c.pagada?"selected":""}>No</option></select></div>
+    </div>
+    <div class="mini">Esta compra no tiene detalle de productos (viene del historial), así que editás los datos generales. El monto no recalcula costos de productos.</div>
+  `,[
+    {label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar esta compra del historial?")){ await DB.del("purchases",c.id); await refreshState(); close(); toast("Compra eliminada","ok"); go("compras"); } }},
+    {label:"Guardar",cls:"btn",fn:async close=>{
+      const monto=parseNum($("ep_monto").value);
+      const forma=$("ep_forma").value;
+      const prov=$("ep_prov").value.trim();
+      const provId=(opts.find(s=>s.nombre.toLowerCase()===prov.toLowerCase())||{}).id||c.proveedorId||null;
+      c.fecha=($("ep_f").value?$("ep_f").value+"T12:00:00.000Z":c.fecha);
+      c.proveedorNombre=prov; c.proveedorId=provId;
+      c.total=monto; c.subtotal=monto; c.iva=0; c.envio=0;
+      c.formaPago=forma; c.vencimiento=($("ep_venc").value?$("ep_venc").value+"T12:00:00.000Z":null);
+      c.pagada=($("ep_pag").value==="si"); c.caja = forma==="contado"?"fisica":null;
+      await DB.put("purchases",c); await refreshState(); close(); toast("Compra actualizada","ok"); go("compras");
+    }}
+  ]);
 }
 function openPurchaseWindow(suppliers){
   suppliers=(suppliers||[]).filter(s=>s.activo!==false).sort((a,b)=>a.nombre.localeCompare(b.nombre));
@@ -3367,15 +3432,19 @@ async function viewBackup(v){
   };
   if($("delAll")) $("delAll").onclick=async()=>{
     if(!_chkPass()) return;
-    if(!confirm("Vas a borrar ABSOLUTAMENTE TODO y dejar el sistema como nuevo: productos, ventas, compras, caja, gastos, inversiones y todo lo cargado. Esta acción NO se puede deshacer. ¿Continuar?")) return;
+    if(!confirm("Vas a borrar ABSOLUTAMENTE TODO (productos, ventas, compras, caja, gastos, inversiones, activos y todo lo cargado) y dejarlo como nuevo. Se conservan SOLO los usuarios para poder ingresar. Esta acción NO se puede deshacer. ¿Continuar?")) return;
     if(!confirm("Confirmación final: ¿borrar todo y empezar de cero?")) return;
     const btn=$("delAll"); if(btn){ btn.disabled=true; btn.textContent="Borrando todo…"; }
     try{
-      for(const s of DB.STORES){ await DB.clear(s); }
+      const cloud = (typeof _db!=="undefined" && _db);
+      const keep={users:1};
+      for(const s of DB.STORES){ if(keep[s]||s==="meta") continue; await _nukeCollection(s); }
+      // meta: dejar sólo el flag anti-demo
+      await _nukeCollection("meta");
       await DB.put("meta",{id:"noDemoSeed",v:1});
-      if(typeof _db!=="undefined" && _db){ try{ await _db.collection("meta").doc("noDemoSeed").set({id:"noDemoSeed",v:1}); }catch(e){} }
+      if(cloud){ try{ await _db.collection("meta").doc("noDemoSeed").set({id:"noDemoSeed",v:1}); }catch(e){} if(typeof MIRROR!=="undefined") MIRROR["meta"]=[{id:"noDemoSeed",v:1}]; }
       toast("Todo borrado. Reiniciando en limpio…","ok");
-      setTimeout(()=>location.reload(), 1200);
+      setTimeout(()=>location.reload(), 900);
     }catch(e){ toast("Error al borrar: "+(e.message||e),"bad"); if(btn){ btn.disabled=false; btn.textContent="🗑 Borrar TODOS los datos"; } }
   };
 }
