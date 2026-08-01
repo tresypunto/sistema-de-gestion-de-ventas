@@ -1897,6 +1897,7 @@ async function viewCompras(v){
       <button class="btn" id="newPurchase">+ Registrar compra</button>
       <button class="btn gh" id="impCompras">Importar Excel</button>
       <button class="btn gray" id="tplCompras">Plantilla Excel</button>
+      <button class="btn gray" id="expCompras">Exportar Excel</button>
     </div>
     <div class="selbar">
       <div style="display:flex;align-items:center;gap:9px"><span class="selcirc" id="cSelAll"></span><span class="sellabel" id="cSelAllLbl">Seleccionar todo</span><span class="mini" id="cSelCount"></span></div>
@@ -1931,6 +1932,11 @@ async function viewCompras(v){
   $("newPurchase").onclick=()=>openPurchaseWindow(suppliers);
   $("impCompras").onclick=importCompras;
   $("tplCompras").onclick=downloadComprasTemplate;
+  $("expCompras").onclick=()=>{
+    const rows=[["Fecha de ingreso","Proveedor","Total","Tipo de venta","Plazo (dias)","Fecha de pago","Pagada","Usuario"]];
+    purchases.forEach(c=>rows.push([(c.fecha||"").slice(0,10),c.proveedorNombre||c.proveedor||"",purchaseTotal(c),c.formaPago==="credito"?"Credito":"Contado",c.diasCredito||"",(c.vencimiento||"").slice(0,10),c.pagada?"Si":"No",userName(c.usuario)]));
+    downloadXLSX("compras-"+todayStr()+".xlsx","Compras",rows);
+  };
 }
 function editPurchaseSimple(c, suppliers){
   const opts=(suppliers||[]).slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));
@@ -2482,7 +2488,7 @@ async function viewGastos(v){
       <div class="kpi ok"><div class="lab">Fijos del mes</div><div class="val">${money(fijosMes)}</div></div>
       <div class="kpi warn"><div class="lab">Variables del mes</div><div class="val">${money(totalMes-fijosMes)}</div></div>
     </div>
-    <div class="toolbar" style="margin-top:16px"><button class="btn" id="newExp">+ Registrar gasto</button><button class="btn gh" id="impGastos">Importar Excel</button><button class="btn gray" id="tplGastos">Plantilla Excel</button><button class="btn gh" id="gAnal">🔍 Analizar fijos/variables</button><button class="btn gray" id="expCsv">Exportar CSV</button></div>
+    <div class="toolbar" style="margin-top:16px"><button class="btn" id="newExp">+ Registrar gasto</button><button class="btn gh" id="impGastos">Importar Excel</button><button class="btn gray" id="tplGastos">Plantilla Excel</button><button class="btn gh" id="gAnal">🔍 Analizar fijos/variables</button><button class="btn gray" id="expGastos">Exportar Excel</button><button class="btn gray" id="expCsv">Exportar CSV</button></div>
     <div class="selbar">
       <div style="display:flex;align-items:center;gap:9px"><span class="selcirc" id="gSelAll"></span><span class="sellabel" id="gSelAllLbl">Seleccionar todo</span><span class="mini" id="gSelCount"></span></div>
       <div id="gSelActions" style="display:none;gap:8px"><button class="btn sm danger" id="gSelDel">🗑 Borrar seleccionados</button><button class="btn sm gray" id="gSelClear">Cancelar</button></div>
@@ -2517,6 +2523,7 @@ async function viewGastos(v){
   };
   $("gAnal").onclick=()=>gastosAnalysis();
   $("expCsv").onclick=()=>{const rows=[["fecha","categoria","tipo","grupo","descripcion","monto","caja","usuario"]];exp.forEach(e=>rows.push([e.fecha,e.categoria,e.tipo||"fijo",grupoGasto(e.categoria),e.descripcion,e.monto,e.caja||"fisica",userName(e.usuario)]));downloadCSV("gastos-"+todayStr()+".csv",rows);};
+  $("expGastos").onclick=()=>{const rows=[["Fecha de Pago","Descripción","Monto","Categoria","Tipo"]];exp.forEach(e=>rows.push([(e.fecha||"").slice(0,10),e.descripcion,e.monto,e.categoria,e.tipo==="variable"?"Variable":"Fijo"]));downloadXLSX("gastos-"+todayStr()+".xlsx","Gastos",rows);};
   $("gSelAll").onclick=gToggle; $("gSelAllLbl").onclick=gToggle;
   $("gSelClear").onclick=()=>{GSEL.clear();gdraw();};
   $("gSelDel").onclick=async()=>{const ids=[...GSEL]; if(!ids.length)return; if(!confirm(`¿Seguro que querés borrar ${ids.length} gasto${ids.length>1?"s":""}? Esta acción NO se puede deshacer.`))return; for(const id of ids) await DB.del("expenses",id); GSEL.clear(); await refreshState(); toast(`${ids.length} gasto${ids.length>1?"s":""} borrado${ids.length>1?"s":""}`,"ok"); go("gastos");};
