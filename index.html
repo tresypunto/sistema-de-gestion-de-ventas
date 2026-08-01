@@ -212,6 +212,7 @@
   .selcirc:hover{border-color:#2E86DE}
   .selcirc.on{background:#2E86DE;border-color:#2E86DE}
   .selcirc.on::after{content:"";position:absolute;left:4.5px;top:1px;width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+  tr.selrow{background:#e8f1fb}
   #invBody tr.selrow{background:#e8f1fb}
   #invBody tr.selrow:hover{background:#dceaf8}
   th.selcol,td.selcol{width:36px;text-align:center;padding-left:10px;padding-right:4px}
@@ -372,7 +373,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
    ========================================================= */
 
 /* ---------- Capa de datos en la NUBE (Firestore + tiempo real) ---------- */
-const STORES = ["products","sales","shifts","cashCloses","expenses","users","priceHistory","purchases","suppliers","combos","movimientos","ajustes","inversiones","perdidas","activos","meta"];
+const STORES = ["products","sales","shifts","cashCloses","expenses","users","priceHistory","purchases","suppliers","combos","movimientos","ajustes","inversiones","perdidas","activos","aportes","meta"];
 const MIRROR = {}; STORES.forEach(s=>MIRROR[s]=[]);
 let _db=null, _auth=null, _ready=false;
 const _firstSnap={};
@@ -458,6 +459,7 @@ const NAV = [
   {id:"ctacte",    label:"Cuenta corriente", ic:"👥", roles:["propietario","gerente","supervisor"]},
   {id:"inversiones",label:"Inversiones", ic:"💸", roles:["propietario","gerente"]},
   {id:"activos",    label:"Activos fijos", ic:"🏢", roles:["propietario","gerente"]},
+  {id:"aportes",    label:"Aporte de capital", ic:"💰", roles:["propietario","gerente"]},
   {id:"rep_general",   label:"Reportes generales", ic:"📊", roles:["propietario","gerente","supervisor"], grp:"reportes"},
   {id:"rep_flujo",     label:"Flujo de fondos", ic:"💵", roles:["propietario","gerente"], grp:"reportes"},
   {id:"rep_resultados",label:"Estado de resultados", ic:"📈", roles:["propietario","gerente"], grp:"reportes"},
@@ -470,8 +472,8 @@ function isOwner(){ return APP.user && (APP.user.rol==="propietario"||APP.user.r
 function soyDuenoTurno(){ return !!(APP.openShift && APP.user && APP.openShift.usuario===APP.user.id); }
 function landingPage(){ return (APP.user && APP.user.rol==="cajero" && soyDuenoTurno()) ? "pos" : "dashboard"; }
 const BANK_METHODS=["transferencia","tarjeta","debito","credito"];
-function purchaseSubtotal(p){ return (p.items||[]).reduce((a,i)=>a+i.cant*(+i.costoUnit||0),0); }
-function purchaseTotal(p){ const sub=purchaseSubtotal(p); return Math.round((sub*(1+(p.iva||0)/100)+(p.envio||0))*100)/100; }
+function purchaseSubtotal(p){ if(p.items&&p.items.length) return p.items.reduce((a,i)=>a+i.cant*(+i.costoUnit||0),0); return (+p.subtotal||+p.total||0); }
+function purchaseTotal(p){ if(!(p.items&&p.items.length)) return Math.round((+p.total||+p.subtotal||0)*100)/100; const sub=purchaseSubtotal(p); return Math.round((sub*(1+(p.iva||0)/100)+(p.envio||0))*100)/100; }
 function shiftBoxes(turnoId, sales, expenses, purchases, movs){
   let vF=0,vB=0,eF=0,eB=0,enF=0;
   (sales||[]).filter(s=>s.turnoId===turnoId&&!s.anulada).forEach(s=>(s.pagos||[{metodo:s.metodoPago,monto:s.total}]).forEach(p=>{ if(p.metodo==="efectivo")vF+=p.monto; else if(BANK_METHODS.includes(p.metodo))vB+=p.monto; }));
@@ -729,7 +731,7 @@ async function go(page){
   const ni=NAV.find(n=>n.id===page);
   if(ni && APP.user && !ni.roles.includes(APP.user.rol)) page=landingPage();
   APP.page=page; setActive();
-  const titles={dashboard:"Panel",pos:"Punto de venta",inventario:"Catálogo",combos:"Promociones y Combos",compras:"Compras",ajustes:"Ajuste de inventario",auditoria:"Auditoría de Stock",perdidas:"Pérdidas",trazabilidad:"Trazabilidad",cuentas:"Cuentas por pagar",proveedores:"Proveedores",ventas:"Historial de ventas",turnos:"Turnos",caja:"Cierre de caja",gastos:"Gastos",ctacte:"Cuenta corriente del equipo",inversiones:"Inversiones",activos:"Activos fijos",rep_general:"Reportes generales",rep_flujo:"Flujo de fondos",rep_resultados:"Estado de resultados",rep_balance:"Balance",equipo:"Mi equipo",usuarios:"Usuarios",backup:"Respaldo de datos"};
+  const titles={dashboard:"Panel",pos:"Punto de venta",inventario:"Catálogo",combos:"Promociones y Combos",compras:"Compras",ajustes:"Ajuste de inventario",auditoria:"Auditoría de Stock",perdidas:"Pérdidas",trazabilidad:"Trazabilidad",cuentas:"Cuentas por pagar",proveedores:"Proveedores",ventas:"Historial de ventas",turnos:"Turnos",caja:"Cierre de caja",gastos:"Gastos",ctacte:"Cuenta corriente del equipo",inversiones:"Inversiones",activos:"Activos fijos",aportes:"Aporte de capital",rep_general:"Reportes generales",rep_flujo:"Flujo de fondos",rep_resultados:"Estado de resultados",rep_balance:"Balance",equipo:"Mi equipo",usuarios:"Usuarios",backup:"Respaldo de datos"};
   $("pageTitle").textContent=titles[page]||"";
   window.__usersCache = await DB.all("users");
   await refreshState(); updateTurnoState();
@@ -751,6 +753,7 @@ async function go(page){
   if(page==="gastos")     return viewGastos(v);
   if(page==="ctacte")     return viewCtaCte(v);
   if(page==="activos")    return viewActivos(v);
+  if(page==="aportes")    return viewAportes(v);
   if(page==="inversiones")return viewInversiones(v);
   if(page==="rep_general")   return viewRepGeneral(v);
   if(page==="rep_flujo")     return viewRepFlujo(v);
@@ -1565,6 +1568,106 @@ function downloadXLSX(filename,sheetName,rows){
   XLSX.writeFile(wb,filename);
   toast("Excel exportado","ok");
 }
+
+function parseFechaFlex(x){
+  if(x==null||x==="") return null;
+  if(x instanceof Date) return isNaN(x)?null:new Date(Date.UTC(x.getFullYear(),x.getMonth(),x.getDate()));
+  if(typeof x==="number" && isFinite(x)) return new Date(Date.UTC(1899,11,30)+Math.round(x)*86400000);
+  const s=String(x).trim(); if(!s) return null;
+  let m=s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);
+  if(m){ let y=m[3]; if(y.length===2) y="20"+y; return new Date(Date.UTC(+y,+m[2]-1,+m[1])); }
+  m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if(m){ return new Date(Date.UTC(+m[1],+m[2]-1,+m[3])); }
+  const d=new Date(s); return isNaN(d)?null:new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate()));
+}
+function fISO(x){ const d=parseFechaFlex(x); if(!d) return null; return d.toISOString().slice(0,10)+"T12:00:00.000Z"; }
+function fYMD(x){ const d=parseFechaFlex(x); if(!d) return null; return d.toISOString().slice(0,10); }
+async function importCompras(){
+  modal("Importar compras (Excel o CSV)",`
+    <div class="help">Primera fila = encabezados. Columnas: <b>Fecha de ingreso, Proveedor, Total, Tipo de venta</b> (contado o crédito), <b>Plazo (dias)</b> y <b>Usuario</b>. Si es a crédito, el <b>plazo en días</b> define el vencimiento en Cuentas por pagar. Bajá la plantilla si querés el formato exacto.</div>
+    <div class="field"><label>Archivo Excel (.xlsx / .xls) o CSV</label><input type="file" id="impC" accept=".xlsx,.xls,.csv,text/csv"></div>
+    <div class="mini" id="impCp"></div>
+  `,[{label:"Importar",cls:"btn",fn:async close=>{
+    const f=$("impC").files[0]; if(!f){toast("Elegí un archivo","bad");return;}
+    let rows; try{ rows=await fileToRows(f);}catch(e){toast("No se pudo leer el archivo","bad");return;}
+    if(!rows||rows.length<2){toast("El archivo no tiene datos","bad");return;}
+    const head=rows[0].map(h=>String(h==null?"":h).trim().toLowerCase());
+    const col=(...ns)=>{ for(const n of ns){ const i=head.indexOf(n.toLowerCase()); if(i>=0) return i;} return -1; };
+    const iF=col("fecha","fecha de ingreso","fecha de pedido"), iP=col("proveedor"), iT=col("total","compra ($)","compra","monto"),
+          iPago=col("pago","fecha de pago"), iU=col("usuario"), iTV=col("tipo de venta","tipo de pago","tipo"), iPlazo=col("plazo (dias)","plazo (días)","plazo","dias","días");
+    if(iP<0||iT<0){ toast('El archivo necesita columnas "Proveedor" y "Total"',"bad"); return; }
+    const users=await DB.all("users");
+    const sup=await DB.all("suppliers"); const supByName={}; sup.forEach(s=>supByName[String(s.nombre).toLowerCase()]=s);
+    const OWNER=(APP.user&&APP.user.id)||null; const TODAY=todayStr();
+    let added=0,newSup=0;
+    for(let i=1;i<rows.length;i++){
+      const r=rows[i]; if(!r||!r.join("").trim()) continue;
+      const prov=String(r[iP]??"").trim(); if(!prov) continue;
+      const total=num(r[iT]);
+      let supObj=supByName[prov.toLowerCase()];
+      if(!supObj){ supObj={id:uid(),nombre:prov,activo:true}; await DB.put("suppliers",supObj); supByName[prov.toLowerCase()]=supObj; newSup++; }
+      const credito=String(iTV>=0?r[iTV]:"").toLowerCase().includes("cred");
+      const fecha=(iF>=0?fISO(r[iF]):null)||new Date().toISOString();
+      const dias=(iPlazo>=0?Math.round(num(r[iPlazo])):0);
+      let venc=(iPago>=0?fISO(r[iPago]):null);
+      if(credito && !venc && dias>0){ const base=new Date(fecha); venc=new Date(base.getTime()+dias*86400000).toISOString().slice(0,10)+"T12:00:00.000Z"; }
+      const pagoYMD=venc?venc.slice(0,10):null;
+      const pagada=credito?(pagoYMD?pagoYMD<=TODAY:false):true;
+      let usuario=OWNER;
+      if(iU>=0){ const un=String(r[iU]??"").trim().toLowerCase(); const u=users.find(x=>String(x.nombre).toLowerCase()===un); if(u) usuario=u.id; }
+      await DB.put("purchases",{id:uid(),fecha,proveedorId:supObj.id,proveedorNombre:prov,items:[],iva:0,envio:0,
+        subtotal:total,total,formaPago:credito?"credito":"contado",diasCredito:credito?dias:0,vencimiento:venc,
+        caja:credito?null:"fisica",pagada,paidFecha:(pagada?(venc||fecha):null),paidCaja:null,paidTurnoId:null,
+        turnoId:null,usuario,fechaRegistro:new Date().toISOString(),_importado:true});
+      added++;
+    }
+    await refreshState(); close(); toast(`Importadas ${added} compras`+(newSup?` \u00b7 ${newSup} proveedores nuevos`:""),"ok"); go("compras");
+  }}]);
+  const inp=$("impC"); inp.onchange=async()=>{ const f=inp.files[0]; if(!f)return; try{const rows=await fileToRows(f); $("impCp").innerHTML=`Detectadas <b>${Math.max(0,rows.length-1)}</b> filas. Columnas: ${rows[0]?rows[0].map(h=>esc(String(h))).join(", "):"\u2014"}`;}catch(e){$("impCp").textContent="No se pudo leer el archivo.";} };
+}
+function downloadComprasTemplate(){
+  downloadXLSX("plantilla-compras.xlsx","Compras",[
+    ["Fecha de ingreso","Proveedor","Total","Tipo de venta","Plazo (dias)","Usuario"],
+    ["2026-07-15","Marcelo",120150,"Contado","","Luciano"],
+    ["2026-07-16","FyF",312060,"Credito",15,"Agustin"]
+  ]);
+}
+async function importGastos(){
+  modal("Importar gastos (Excel o CSV)",`
+    <div class="help">Primera fila = encabezados. Columnas: <b>Fecha de Pago, Descripción, Monto, Categoria, Tipo</b> (fijo o variable).</div>
+    <div class="field"><label>Archivo Excel (.xlsx / .xls) o CSV</label><input type="file" id="impG" accept=".xlsx,.xls,.csv,text/csv"></div>
+    <div class="mini" id="impGp"></div>
+  `,[{label:"Importar",cls:"btn",fn:async close=>{
+    const f=$("impG").files[0]; if(!f){toast("Elegí un archivo","bad");return;}
+    let rows; try{ rows=await fileToRows(f);}catch(e){toast("No se pudo leer el archivo","bad");return;}
+    if(!rows||rows.length<2){toast("El archivo no tiene datos","bad");return;}
+    const head=rows[0].map(h=>String(h==null?"":h).trim().toLowerCase());
+    const col=(...ns)=>{ for(const n of ns){ const i=head.indexOf(n.toLowerCase()); if(i>=0) return i;} return -1; };
+    const iF=col("fecha de pago","fecha"), iD=col("descripcion","descripción"), iM=col("monto","importe","total"),
+          iC=col("categoria","categoría","concepto"), iT=col("tipo");
+    if(iD<0||iM<0){ toast('El archivo necesita columnas "Descripción" y "Monto"',"bad"); return; }
+    const OWNER=(APP.user&&APP.user.id)||null; let added=0;
+    for(let i=1;i<rows.length;i++){
+      const r=rows[i]; if(!r||!r.join("").trim()) continue;
+      const desc=String(r[iD]??"").trim(); if(!desc) continue;
+      const monto=num(r[iM]); if(!(monto>0)) continue;
+      const cat=String(iC>=0?r[iC]:"").trim()||"Administrativo";
+      const tipo=String(iT>=0?r[iT]:"").toLowerCase().includes("fij")?"fijo":"variable";
+      const fecha=(iF>=0?fYMD(r[iF]):null)||todayStr();
+      await DB.put("expenses",{id:uid(),fecha,fechaRegistro:new Date().toISOString(),categoria:cat,tipo,descripcion:desc,monto,caja:"fisica",usuario:OWNER,turnoId:null,_importado:true});
+      added++;
+    }
+    await refreshState(); close(); toast(`Importados ${added} gastos`,"ok"); go("gastos");
+  }}]);
+  const inp=$("impG"); inp.onchange=async()=>{ const f=inp.files[0]; if(!f)return; try{const rows=await fileToRows(f); $("impGp").innerHTML=`Detectadas <b>${Math.max(0,rows.length-1)}</b> filas.`;}catch(e){$("impGp").textContent="No se pudo leer el archivo.";} };
+}
+function downloadGastosTemplate(){
+  downloadXLSX("plantilla-gastos.xlsx","Gastos",[
+    ["Fecha de Pago","Descripción","Monto","Categoria","Tipo"],
+    ["2026-07-24","ARCA",7000,"Administrativo","variable"],
+    ["2026-07-05","Alquiler",523322,"Alquiler","fijo"]
+  ]);
+}
 function downloadProductTemplate(){
   const rows=[
     PROD_HEADERS,
@@ -1786,35 +1889,48 @@ function anularVenta(sale,closeDetail){
 async function viewCompras(v){
   const purchases=(await DB.all("purchases")).sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
   const suppliers=await DB.all("suppliers");
+  const SEL=new Set(); let visibles=[];
   v.innerHTML=`
-    <div class="help">Al registrar una compra con productos, el sistema <b>recalcula el costo promedio</b> de cada uno. Abajo tenés el <b>historial completo</b>; podés editar cualquier fila si hay un dato mal.</div>
+    <div class="help">Al registrar una compra con productos, el sistema <b>recalcula el costo promedio</b>. Abajo tenés el <b>historial completo</b>; podés seleccionar, editar o borrar filas.</div>
     <div class="toolbar">
       <div class="search"><input id="compSearch" placeholder="Buscar por proveedor…"></div>
       <button class="btn" id="newPurchase">+ Registrar compra</button>
+      <button class="btn gh" id="impCompras">Importar Excel</button>
+      <button class="btn gray" id="tplCompras">Plantilla Excel</button>
     </div>
-    <div class="mini" id="compCount" style="margin:4px 2px 10px"></div>
-    <div class="card"><div class="card-b flush"><div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Proveedor</th><th class="num">Total</th><th>Pago</th><th>Usuario</th><th></th></tr></thead><tbody id="compBody"></tbody></table></div></div></div>`;
+    <div class="selbar">
+      <div style="display:flex;align-items:center;gap:9px"><span class="selcirc" id="cSelAll"></span><span class="sellabel" id="cSelAllLbl">Seleccionar todo</span><span class="mini" id="cSelCount"></span></div>
+      <div id="cSelActions" style="display:none;gap:8px"><button class="btn sm danger" id="cSelDel">🗑 Borrar seleccionadas</button><button class="btn sm gray" id="cSelClear">Cancelar</button></div>
+    </div>
+    <div class="card"><div class="card-b flush"><div class="tbl-wrap"><table><thead><tr><th class="selcol"></th><th>Fecha registro</th><th>Fecha ingreso</th><th>Proveedor</th><th class="num">Total</th><th>Pago</th><th>Usuario</th><th></th></tr></thead><tbody id="compBody"></tbody></table></div></div></div>`;
   function draw(){
     const q=($("compSearch").value||"").toLowerCase().trim();
     let list=purchases;
     if(q) list=list.filter(c=>String(c.proveedorNombre||c.proveedor||"").toLowerCase().includes(q));
-    $("compCount").textContent=`${list.length} compra${list.length!==1?"s":""}`+(q?" (filtradas)":"");
-    $("compBody").innerHTML=list.map(c=>`<tr>
+    visibles=list;
+    $("compBody").innerHTML=list.map(c=>{const on=SEL.has(c.id);return `<tr class="${on?'selrow':''}">
+      <td class="selcol"><span class="selcirc ${on?'on':''}" data-sel="${c.id}"></span></td>
+      <td class="mini">${c.fechaRegistro?fmtDateTime(c.fechaRegistro):"—"}</td>
       <td>${c.fecha?fmtDateTime(c.fecha):"—"}</td>
       <td>${esc(c.proveedorNombre||c.proveedor||"—")}</td>
       <td class="num">${money(purchaseTotal(c))}</td>
       <td>${c.formaPago==="credito"?(c.pagada?'<span class="badge ok">crédito · pagada</span>':'<span class="badge warn">crédito · a pagar</span>'):'<span class="badge cel">contado</span>'}</td>
       <td class="mini">${esc(userName(c.usuario))}</td>
-      <td class="right"><button class="btn sm gray" data-editp="${c.id}">Editar</button></td>
-    </tr>`).join("")||`<tr><td colspan="6"><div class="empty">Sin compras.</div></td></tr>`;
+      <td class="right"><button class="btn sm gray" data-editp="${c.id}">Editar</button></td></tr>`;}).join("")||`<tr><td colspan="8"><div class="empty">Sin compras.</div></td></tr>`;
     $("compBody").querySelectorAll("[data-editp]").forEach(b=>b.onclick=()=>{ const c=purchases.find(x=>x.id===b.dataset.editp); if(c.items&&c.items.length>0) editPurchaseModal(c); else editPurchaseSimple(c,suppliers); });
+    $("compBody").querySelectorAll("[data-sel]").forEach(s=>s.onclick=()=>{ const id=s.dataset.sel; if(SEL.has(id))SEL.delete(id);else SEL.add(id); draw(); });
+    const n=SEL.size; $("cSelCount").textContent=n?`· ${n} seleccionada${n>1?"s":""}`:""; $("cSelActions").style.display=n?"flex":"none";
+    $("cSelAll").classList.toggle("on", visibles.length>0 && visibles.every(c=>SEL.has(c.id)));
   }
-  if(!window.__purchaseListener){
-    window.__purchaseListener=true;
-    window.addEventListener("message", async e=>{ if(e && e.data && e.data.__purchase){ await applyPurchase(e.data.data); } });
-  }
+  const toggleAll=()=>{ const all=visibles.length>0&&visibles.every(c=>SEL.has(c.id)); if(all)visibles.forEach(c=>SEL.delete(c.id));else visibles.forEach(c=>SEL.add(c.id)); draw(); };
+  $("cSelAll").onclick=toggleAll; $("cSelAllLbl").onclick=toggleAll;
+  $("cSelClear").onclick=()=>{ SEL.clear(); draw(); };
+  $("cSelDel").onclick=async()=>{ const ids=[...SEL]; if(!ids.length)return; if(!confirm(`¿Seguro que querés borrar ${ids.length} compra${ids.length>1?"s":""}? Esta acción NO se puede deshacer.`))return; for(const id of ids) await DB.del("purchases",id); SEL.clear(); await refreshState(); toast(`${ids.length} compra${ids.length>1?"s":""} borrada${ids.length>1?"s":""}`,"ok"); go("compras"); };
+  if(!window.__purchaseListener){ window.__purchaseListener=true; window.addEventListener("message", async e=>{ if(e && e.data && e.data.__purchase){ await applyPurchase(e.data.data); } }); }
   $("compSearch").oninput=draw; draw();
   $("newPurchase").onclick=()=>openPurchaseWindow(suppliers);
+  $("impCompras").onclick=importCompras;
+  $("tplCompras").onclick=downloadComprasTemplate;
 }
 function editPurchaseSimple(c, suppliers){
   const opts=(suppliers||[]).slice().sort((a,b)=>a.nombre.localeCompare(b.nombre));
@@ -1833,7 +1949,7 @@ function editPurchaseSimple(c, suppliers){
       <div class="field"><label>Fecha de pago / vencimiento</label><input type="date" id="ep_venc" value="${vencVal}"></div>
       <div class="field"><label>¿Pagada?</label><select id="ep_pag"><option value="si" ${c.pagada?"selected":""}>Sí</option><option value="no" ${!c.pagada?"selected":""}>No</option></select></div>
     </div>
-    <div class="mini">Esta compra no tiene detalle de productos (viene del historial), así que editás los datos generales. El monto no recalcula costos de productos.</div>
+    <div class="mini">Fecha de registro: <b>${c.fechaRegistro?fmtDateTime(c.fechaRegistro):"—"}</b> (automática, no editable). Editás la fecha de ingreso y los datos generales.</div>
   `,[
     {label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar esta compra del historial?")){ await DB.del("purchases",c.id); await refreshState(); close(); toast("Compra eliminada","ok"); go("compras"); } }},
     {label:"Guardar",cls:"btn",fn:async close=>{
@@ -1905,11 +2021,12 @@ function openPurchaseWindow(suppliers){
   <header><h1>Registrar compra / ingreso de stock</h1></header>
   <div class="wrap">
     <label>Proveedor</label><select id="prov"></select>
+    <label>Fecha de ingreso de la mercadería</label><input type="date" id="fingreso">
     <label>Buscar producto por nombre o código</label><input id="search" placeholder="Escribí el nombre del producto…" autocomplete="off"><div id="res"></div>
     <table><thead><tr><th class="cc">Confirmación</th><th>Producto</th><th class="num">Cantidad</th><th class="num">Costo ingreso</th><th class="num">Importe</th><th class="num">Costo promedio</th><th class="num">Precio venta</th><th class="num">Markup</th><th></th></tr></thead><tbody id="tb"></tbody></table>
-    <div id="hint">Tildá (confirmá) todos los productos para poder cargar el IVA, el envío y confirmar la compra.</div>
+    <div id="hint">Tildá (confirmá) todos los productos para poder cargar el IVA (opcional), el envío y confirmar la compra.</div>
     <div class="grid2">
-      <div><label>IVA de la boleta — se completa en % (entre 1 y 100)</label><input id="iva" inputmode="decimal" placeholder="Ej: 21" disabled></div>
+      <div><label>IVA de la boleta (opcional) — en %, 0 a 100</label><input id="iva" inputmode="decimal" placeholder="Ej: 21 (opcional)" disabled></div>
       <div><label>Costo de envío ($)</label><input id="envio" inputmode="decimal" value="0" disabled></div>
     </div>
     <div class="note">El <b>IVA %</b> se le suma al costo de <b>cada producto</b> (si el costo es 100 y el IVA 21%, el costo final del producto pasa a 121). El envío NO afecta el costo, pero sí el total a pagar al proveedor.</div>
@@ -1924,6 +2041,7 @@ function openPurchaseWindow(suppliers){
     function money(n){return "$"+Math.round(+n||0).toLocaleString("es-AR");}
     function num(s){var v=parseFloat(String(s).replace(",",".")); return isNaN(v)?0:v;}
     var prov=document.getElementById("prov");
+    try{ document.getElementById("fingreso").value=new Date().toISOString().slice(0,10); }catch(e){}
     prov.innerHTML='<option value="">— Elegí un proveedor —</option>'+SUPS.map(function(s){return '<option value="'+s.i+'">'+esc(s.n)+'</option>';}).join("");
     var search=document.getElementById("search"), res=document.getElementById("res");
     search.oninput=function(){
@@ -1991,7 +2109,7 @@ function openPurchaseWindow(suppliers){
     }
     function updConfirm(){
       var iva=num(document.getElementById("iva").value);
-      document.getElementById("confirm").disabled=!(document.getElementById("prov").value && lines.length && allConfirmed() && iva>=1 && iva<=100);
+      document.getElementById("confirm").disabled=!(document.getElementById("prov").value && lines.length && allConfirmed());
     }
     document.getElementById("iva").oninput=function(){ var v=this.value.replace(/[^0-9.,]/g,""); if(num(v)>100) v="100"; this.value=v; draw(); };
     document.getElementById("envio").oninput=function(){ this.value=this.value.replace(/[^0-9.,]/g,""); updTotal(); };
@@ -2004,11 +2122,11 @@ function openPurchaseWindow(suppliers){
       if(!document.getElementById("prov").value){ alert("Elegí un proveedor."); return; }
       if(!lines.length){ alert("Agregá al menos un producto."); return; }
       if(!allConfirmed()){ alert("Confirmá (tildá el círculo verde) de todos los productos antes de cargar la boleta."); return; }
-      if(!(iva>=1 && iva<=100)){ alert("El IVA debe ser un número entre 1 y 100 (es un porcentaje)."); return; }
+      if(iva<0 || iva>100){ alert("El IVA es un porcentaje: tiene que estar entre 0 y 100."); return; }
       var pv=document.getElementById("prov");
       var data={proveedorId:pv.value, proveedorNombre:pv.options[pv.selectedIndex].text,
         lines:lines.map(function(l){return {id:l.id,cant:+l.cant||0,costoUnit:+l.costoUnit||0,precio:+l.precio||0};}),
-        iva:iva, envio:num(document.getElementById("envio").value), forma:forma.value, dias:num(document.getElementById("dias").value)};
+        fecha:document.getElementById("fingreso").value, iva:iva, envio:num(document.getElementById("envio").value), forma:forma.value, dias:num(document.getElementById("dias").value)};
       if(window.opener && !window.opener.closed){ window.opener.postMessage({__purchase:true, data:data}, "*"); alert("Compra registrada. Se actualizaron stock, costos y precios."); window.close(); }
       else { alert("La ventana principal se cerró. Volvé a abrir la compra."); }
     };
@@ -2035,7 +2153,7 @@ async function applyPurchase(d){
   const total=Math.round((subtotal*fac+envio)*100)/100;
   const dias=d.forma==="credito"?(parseInt(d.dias)||0):0;
   const venc=(d.forma==="credito"&&dias>0)?new Date(Date.now()+dias*86400000).toISOString():null;
-  await DB.put("purchases",{id:uid(),fecha:new Date().toISOString(),proveedorId:d.proveedorId||null,proveedorNombre:prov?prov.nombre:(d.proveedorNombre||""),
+  await DB.put("purchases",{id:uid(),fecha:(d.fecha?d.fecha+"T12:00:00.000Z":new Date().toISOString()),fechaRegistro:new Date().toISOString(),proveedorId:d.proveedorId||null,proveedorNombre:prov?prov.nombre:(d.proveedorNombre||""),
     items:d.lines.map(l=>({productId:l.id,cant:+l.cant||0,costoUnit:+l.costoUnit||0})),
     iva,envio,subtotal,total,formaPago:d.forma,diasCredito:dias,vencimiento:venc,
     caja:(d.forma==="contado"?"fisica":null),pagada:(d.forma==="contado"),paidTurnoId:null,paidCaja:null,paidFecha:null,
@@ -2364,20 +2482,34 @@ async function viewGastos(v){
       <div class="kpi ok"><div class="lab">Fijos del mes</div><div class="val">${money(fijosMes)}</div></div>
       <div class="kpi warn"><div class="lab">Variables del mes</div><div class="val">${money(totalMes-fijosMes)}</div></div>
     </div>
-    <div class="toolbar" style="margin-top:16px"><button class="btn" id="newExp">+ Registrar gasto</button><button class="btn gh" id="gAnal">🔍 Analizar fijos/variables</button><button class="btn gray" id="expCsv">Exportar CSV</button></div>
-    <div class="card"><div class="card-b flush"><div class="tbl-wrap"><table><thead><tr><th>Fecha</th><th>Categoría</th><th>Tipo</th><th>Descripción</th><th class="num">Monto</th><th>Usuario</th><th></th></tr></thead><tbody>
-    ${exp.slice(0,80).map(e=>`<tr><td>${fmtDate(e.fecha)}</td><td><span class="badge cel">${esc(e.categoria)}</span></td><td>${e.tipo==="variable"?'<span class="badge warn">Variable</span>':'<span class="badge ok">Fijo</span>'}</td><td>${esc(e.descripcion)}</td><td class="num">${money(e.monto)}</td><td class="mini">${esc(userName(e.usuario))}</td><td class="right"><button class="rm" data-del="${e.id}">×</button></td></tr>`).join("")||`<tr><td colspan="7"><div class="empty">Sin gastos.</div></td></tr>`}
-    </tbody></table></div></div></div>`;
+    <div class="toolbar" style="margin-top:16px"><button class="btn" id="newExp">+ Registrar gasto</button><button class="btn gh" id="impGastos">Importar Excel</button><button class="btn gray" id="tplGastos">Plantilla Excel</button><button class="btn gh" id="gAnal">🔍 Analizar fijos/variables</button><button class="btn gray" id="expCsv">Exportar CSV</button></div>
+    <div class="selbar">
+      <div style="display:flex;align-items:center;gap:9px"><span class="selcirc" id="gSelAll"></span><span class="sellabel" id="gSelAllLbl">Seleccionar todo</span><span class="mini" id="gSelCount"></span></div>
+      <div id="gSelActions" style="display:none;gap:8px"><button class="btn sm danger" id="gSelDel">🗑 Borrar seleccionados</button><button class="btn sm gray" id="gSelClear">Cancelar</button></div>
+    </div>
+    <div class="card"><div class="card-b flush"><div class="tbl-wrap"><table><thead><tr><th class="selcol"></th><th>Fecha registro</th><th>Fecha ingreso</th><th>Categoría</th><th>Tipo</th><th>Descripción</th><th class="num">Monto</th><th>Usuario</th><th></th></tr></thead><tbody id="gastBody"></tbody></table></div></div></div>`;
+  const GSEL=new Set();
+  function gdraw(){
+    $("gastBody").innerHTML=exp.map(e=>{const on=GSEL.has(e.id);return `<tr class="${on?'selrow':''}"><td class="selcol"><span class="selcirc ${on?'on':''}" data-sel="${e.id}"></span></td><td class="mini">${e.fechaRegistro?fmtDateTime(e.fechaRegistro):"—"}</td><td>${fmtDate(e.fecha)}</td><td><span class="badge cel">${esc(e.categoria)}</span></td><td>${e.tipo==="variable"?'<span class="badge warn">Variable</span>':'<span class="badge ok">Fijo</span>'}</td><td>${esc(e.descripcion)}</td><td class="num">${money(e.monto)}</td><td class="mini">${esc(userName(e.usuario))}</td><td class="right"><button class="btn sm gray" data-edx="${e.id}">Editar</button> <button class="rm" data-del="${e.id}">×</button></td></tr>`;}).join("")||`<tr><td colspan="9"><div class="empty">Sin gastos.</div></td></tr>`;
+    const n=GSEL.size; $("gSelCount").textContent=n?`· ${n} seleccionado${n>1?"s":""}`:""; $("gSelActions").style.display=n?"flex":"none";
+    $("gSelAll").classList.toggle("on", exp.length>0 && exp.every(e=>GSEL.has(e.id)));
+    $("gastBody").querySelectorAll("[data-sel]").forEach(s=>s.onclick=()=>{const id=s.dataset.sel; if(GSEL.has(id))GSEL.delete(id);else GSEL.add(id); gdraw();});
+    $("gastBody").querySelectorAll("[data-edx]").forEach(b=>b.onclick=()=>editExpenseModal(exp.find(x=>x.id===b.dataset.edx)));
+    $("gastBody").querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{if(confirm("¿Eliminar gasto?")){await DB.del("expenses",b.dataset.del);await refreshState();go("gastos");}});
+  }
+  const gToggle=()=>{const all=exp.length>0&&exp.every(e=>GSEL.has(e.id)); if(all)GSEL.clear();else exp.forEach(e=>GSEL.add(e.id)); gdraw();};
+  $("impGastos").onclick=importGastos;
+  $("tplGastos").onclick=downloadGastosTemplate;
   $("newExp").onclick=()=>{
     modal("Registrar gasto",`
-      <div class="row2"><div class="field"><label>Fecha</label><input type="date" id="g_fecha" value="${todayStr()}"></div>
+      <div class="row2"><div class="field"><label>Fecha de ingreso</label><input type="date" id="g_fecha" value="${todayStr()}"></div>
       <div class="field"><label>Categoría</label><select id="g_cat">${cats.map(c=>`<option>${c}</option>`).join("")}</select></div></div>
       <div class="field"><label>Tipo de gasto</label><select id="g_tipo"><option value="fijo">Fijo</option><option value="variable">Variable</option></select></div>
       <div class="field"><label>Descripción</label><input id="g_desc"></div>
       <div class="field"><label>Monto</label><input id="g_monto" inputmode="decimal"></div>
     `,[{label:"Guardar",cls:"btn",fn:async close=>{
       const monto=parseFloat($("g_monto").value)||0; if(monto<=0){toast("Ingresá un monto","bad");return;}
-      await DB.put("expenses",{id:uid(),fecha:$("g_fecha").value,categoria:$("g_cat").value,tipo:$("g_tipo").value,descripcion:$("g_desc").value.trim(),monto,caja:"fisica",usuario:APP.user.id,turnoId:APP.openShift?APP.openShift.id:null});
+      await DB.put("expenses",{id:uid(),fecha:$("g_fecha").value,fechaRegistro:new Date().toISOString(),categoria:$("g_cat").value,tipo:$("g_tipo").value,descripcion:$("g_desc").value.trim(),monto,caja:"fisica",usuario:APP.user.id,turnoId:APP.openShift?APP.openShift.id:null});
       close(); toast("Gasto registrado","ok"); go("gastos");
     }}]);
     const setTipo=()=>{ $("g_tipo").value=GASTO_TIPO_DEF[$("g_cat").value]||"fijo"; };
@@ -2385,12 +2517,37 @@ async function viewGastos(v){
   };
   $("gAnal").onclick=()=>gastosAnalysis();
   $("expCsv").onclick=()=>{const rows=[["fecha","categoria","tipo","grupo","descripcion","monto","caja","usuario"]];exp.forEach(e=>rows.push([e.fecha,e.categoria,e.tipo||"fijo",grupoGasto(e.categoria),e.descripcion,e.monto,e.caja||"fisica",userName(e.usuario)]));downloadCSV("gastos-"+todayStr()+".csv",rows);};
-  v.querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{if(confirm("¿Eliminar gasto?")){await DB.del("expenses",b.dataset.del);go("gastos");}});
+  $("gSelAll").onclick=gToggle; $("gSelAllLbl").onclick=gToggle;
+  $("gSelClear").onclick=()=>{GSEL.clear();gdraw();};
+  $("gSelDel").onclick=async()=>{const ids=[...GSEL]; if(!ids.length)return; if(!confirm(`¿Seguro que querés borrar ${ids.length} gasto${ids.length>1?"s":""}? Esta acción NO se puede deshacer.`))return; for(const id of ids) await DB.del("expenses",id); GSEL.clear(); await refreshState(); toast(`${ids.length} gasto${ids.length>1?"s":""} borrado${ids.length>1?"s":""}`,"ok"); go("gastos");};
+  gdraw();
 }
 
 /* =========================================================
    REPORTES
    ========================================================= */
+function editExpenseModal(e){
+  if(!e) return;
+  modal("Editar gasto",`
+    <div class="row2">
+      <div class="field"><label>Fecha de ingreso</label><input type="date" id="eg_f" value="${(e.fecha||"").slice(0,10)}"></div>
+      <div class="field"><label>Categoría</label><select id="eg_cat">${GASTO_CATS.map(c=>`<option ${c===e.categoria?"selected":""}>${esc(c)}</option>`).join("")}</select></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Tipo de gasto</label><select id="eg_tipo"><option value="fijo" ${e.tipo!=="variable"?"selected":""}>Fijo</option><option value="variable" ${e.tipo==="variable"?"selected":""}>Variable</option></select></div>
+      <div class="field"><label>Monto</label><input id="eg_monto" inputmode="decimal" value="${e.monto||0}"></div>
+    </div>
+    <div class="field"><label>Descripción</label><input id="eg_desc" value="${esc(e.descripcion||"")}"></div>
+    <div class="mini">Fecha de registro: <b>${e.fechaRegistro?fmtDateTime(e.fechaRegistro):"—"}</b> (automática, no editable).</div>
+  `,[
+    {label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar este gasto?")){ await DB.del("expenses",e.id); await refreshState(); close(); toast("Gasto eliminado","ok"); go("gastos"); } }},
+    {label:"Guardar",cls:"btn",fn:async close=>{
+      const monto=parseNum($("eg_monto").value); if(!(monto>0)){ toast("Poné un monto válido","bad"); return; }
+      e.fecha=$("eg_f").value||e.fecha; e.categoria=$("eg_cat").value; e.tipo=$("eg_tipo").value; e.monto=monto; e.descripcion=$("eg_desc").value.trim();
+      await DB.put("expenses",e); await refreshState(); close(); toast("Gasto actualizado","ok"); go("gastos");
+    }}
+  ]);
+}
 async function viewReportes(v){
   const today=todayStr();
   const firstOfMonth=today.slice(0,8)+"01";
@@ -3026,6 +3183,73 @@ function activoModal(a){
     await DB.put("activos",obj); await refreshState(); close(); toast(a?"Activo actualizado":"Activo agregado","ok"); go("activos");
   }}]);
 }
+const APORTE_MOTIVOS=["Aporte socios","Aporte terceros","Otro"];
+async function viewAportes(v){
+  if(APP.user.rol!=="propietario" && APP.user.rol!=="gerente"){ v.innerHTML=`<div class="help">Solo propietarios o gerentes pueden ver Aportes de capital.</div>`; return; }
+  const list=(await DB.all("aportes")).sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
+  const SEL=new Set();
+  const total=list.reduce((a,x)=>a+(+x.monto||0),0);
+  const socios=list.filter(x=>x.motivo==="Aporte socios").reduce((a,x)=>a+(+x.monto||0),0);
+  const terceros=list.filter(x=>x.motivo==="Aporte terceros").reduce((a,x)=>a+(+x.monto||0),0);
+  v.innerHTML=`
+    <div class="help">Ingresos de dinero que <b>no son ventas</b>: aportes de socios o de terceros. Impactan en el <b>flujo de fondos</b> (financiación) y en el <b>balance</b> (patrimonio).</div>
+    <div class="grid kpis">
+      <div class="kpi"><div class="lab">Total aportado</div><div class="val">${money(total)}</div></div>
+      <div class="kpi ok"><div class="lab">Aporte de socios</div><div class="val">${money(socios)}</div></div>
+      <div class="kpi warn"><div class="lab">Aporte de terceros</div><div class="val">${money(terceros)}</div></div>
+    </div>
+    <div class="toolbar" style="margin-top:12px"><button class="btn" id="addAp">+ Registrar aporte</button></div>
+    <div class="selbar">
+      <div style="display:flex;align-items:center;gap:9px"><span class="selcirc" id="apSelAll"></span><span class="sellabel" id="apSelAllLbl">Seleccionar todo</span><span class="mini" id="apSelCount"></span></div>
+      <div id="apSelActions" style="display:none;gap:8px"><button class="btn sm danger" id="apSelDel">🗑 Borrar seleccionados</button><button class="btn sm gray" id="apSelClear">Cancelar</button></div>
+    </div>
+    <div class="card"><div class="card-b flush"><div class="tbl-wrap"><table>
+      <thead><tr><th class="selcol"></th><th>Fecha</th><th>Descripción</th><th>Proviene de</th><th class="num">Monto</th><th>Motivo</th><th></th></tr></thead>
+      <tbody id="apBody"></tbody></table></div></div></div>`;
+  function draw(){
+    $("apBody").innerHTML=list.map(a=>{const on=SEL.has(a.id);return `<tr class="${on?'selrow':''}">
+      <td class="selcol"><span class="selcirc ${on?'on':''}" data-sel="${a.id}"></span></td>
+      <td>${a.fecha?fmtDate(a.fecha):"—"}</td>
+      <td>${esc(a.descripcion||"—")}</td>
+      <td>${esc(a.proviene||"—")}</td>
+      <td class="num" style="font-weight:700">${money(a.monto)}</td>
+      <td><span class="badge ${a.motivo==="Aporte socios"?'ok':a.motivo==="Aporte terceros"?'warn':'cel'}">${esc(a.motivo||"—")}</span></td>
+      <td class="right"><button class="btn sm gray" data-ed="${a.id}">Editar</button></td></tr>`;}).join("")||`<tr><td colspan="7"><div class="empty">Todavía no hay aportes cargados.</div></td></tr>`;
+    $("apBody").querySelectorAll("[data-ed]").forEach(b=>b.onclick=()=>aporteModal(list.find(a=>a.id===b.dataset.ed)));
+    $("apBody").querySelectorAll("[data-sel]").forEach(s=>s.onclick=()=>{const id=s.dataset.sel; if(SEL.has(id))SEL.delete(id);else SEL.add(id); draw();});
+    const n=SEL.size; $("apSelCount").textContent=n?`· ${n} seleccionado${n>1?"s":""}`:""; $("apSelActions").style.display=n?"flex":"none";
+    $("apSelAll").classList.toggle("on", list.length>0 && list.every(a=>SEL.has(a.id)));
+  }
+  const toggle=()=>{const all=list.length>0&&list.every(a=>SEL.has(a.id)); if(all)SEL.clear();else list.forEach(a=>SEL.add(a.id)); draw();};
+  $("apSelAll").onclick=toggle; $("apSelAllLbl").onclick=toggle;
+  $("apSelClear").onclick=()=>{SEL.clear();draw();};
+  $("apSelDel").onclick=async()=>{const ids=[...SEL]; if(!ids.length)return; if(!confirm(`¿Seguro que querés borrar ${ids.length} aporte${ids.length>1?"s":""}? Esta acción NO se puede deshacer.`))return; for(const id of ids) await DB.del("aportes",id); SEL.clear(); await refreshState(); toast(`${ids.length} aporte${ids.length>1?"s":""} borrado${ids.length>1?"s":""}`,"ok"); go("aportes");};
+  $("addAp").onclick=()=>aporteModal(null);
+  draw();
+}
+function aporteModal(a){
+  const e=a||{};
+  modal(a?"Editar aporte":"Registrar aporte de capital",`
+    <div class="row2">
+      <div class="field"><label>Fecha</label><input type="date" id="ap_f" value="${e.fecha?e.fecha.slice(0,10):todayStr()}"></div>
+      <div class="field"><label>Monto</label><input id="ap_m" inputmode="decimal" value="${e.monto||""}"></div>
+    </div>
+    <div class="field"><label>Descripción</label><input id="ap_d" value="${esc(e.descripcion||"")}" placeholder="Ej: Aporte inicial"></div>
+    <div class="row2">
+      <div class="field"><label>Proviene de</label><input id="ap_p" value="${esc(e.proviene||"")}" placeholder="Ej: SOCIOS"></div>
+      <div class="field"><label>Motivo</label><select id="ap_mot">${APORTE_MOTIVOS.map(m=>`<option ${m===e.motivo?"selected":""}>${m}</option>`).join("")}</select></div>
+    </div>
+  `,[
+    ...(a?[{label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar este aporte?")){ await DB.del("aportes",a.id); await refreshState(); close(); toast("Aporte eliminado","ok"); go("aportes"); } }}]:[]),
+    {label:a?"Guardar":"Registrar",cls:"btn",fn:async close=>{
+      const monto=parseNum($("ap_m").value); if(!(monto>0)){ toast("Poné un monto válido","bad"); return; }
+      const obj={id:a?a.id:uid(),fecha:($("ap_f").value?$("ap_f").value+"T12:00:00.000Z":new Date().toISOString()),
+        descripcion:$("ap_d").value.trim(),proviene:$("ap_p").value.trim(),monto,motivo:$("ap_mot").value,
+        fechaRegistro:a?a.fechaRegistro:new Date().toISOString(),usuario:APP.user.id};
+      await DB.put("aportes",obj); await refreshState(); close(); toast(a?"Aporte actualizado":"Aporte registrado","ok"); go("aportes");
+    }}
+  ]);
+}
 async function viewTrazabilidad(v){
   if(APP.user.rol!=="propietario"){ v.innerHTML=`<div class="help">Solo los <b>propietarios</b> pueden acceder a Trazabilidad.</div>`; return; }
   v.innerHTML=`
@@ -3254,22 +3478,23 @@ async function viewRepGeneral(v){
 }
 async function viewRepFlujo(v){
   const sales=(await DB.all("sales")).filter(s=>!s.anulada);
-  const expenses=await DB.all("expenses"), purchases=await DB.all("purchases"), movs=await DB.all("movimientos"), inversiones=await DB.all("inversiones");
-  const years=_yearsData(sales,expenses,purchases,movs,inversiones);
+  const expenses=await DB.all("expenses"), purchases=await DB.all("purchases"), movs=await DB.all("movimientos"), inversiones=await DB.all("inversiones"), aportesArr=await DB.all("aportes");
+  const years=_yearsData(sales,expenses,purchases,movs,inversiones,aportesArr);
   v.innerHTML=`<div class="help">Flujo de fondos mensual (base <b>caja</b>: entradas y salidas reales de dinero). Ordenado por actividad. Filtrá el año y mirá los 12 meses uno al lado del otro.</div>
     <div class="toolbar"><div class="field" style="margin:0"><label>Año</label><select id="ff_y">${years.map(y=>`<option>${y}</option>`).join("")}</select></div></div><div id="ff_out"></div>`;
   const render=()=>{
     const Y=$("ff_y").value, mi=f=>_mesIdx(f,Y), z=()=>Array(12).fill(0);
-    const ventasEfe=z(), ventasEle=z(), entradas=z(), comprasPag=z(), gastosFijos=z(), gastosVar=z(), pagosProv=z(), salidas=z(), invers=z();
+    const ventasEfe=z(), ventasEle=z(), entradas=z(), comprasPag=z(), gastosFijos=z(), gastosVar=z(), pagosProv=z(), salidas=z(), invers=z(), aportes=z();
     sales.forEach(s=>{ const m=mi(s.fecha); if(m<0)return; (s.pagos&&s.pagos.length?s.pagos:[{metodo:s.metodoPago,monto:s.total}]).forEach(p=>{ if(p.metodo==="efectivo") ventasEfe[m]+=p.monto; else ventasEle[m]+=p.monto; }); });
     movs.forEach(x=>{ const m=mi(x.fecha); if(m<0)return; if(x.tipo==="entrada") entradas[m]+=x.monto; else salidas[m]+=x.monto; });
     purchases.forEach(c=>{ if(c.formaPago==="contado"){ const m=mi(c.fecha); if(m>=0) comprasPag[m]+=(c.total||0); } else if(c.pagada){ const m=mi(c.paidFecha||c.fecha); if(m>=0) pagosProv[m]+=(c.total||0); } });
     expenses.forEach(e=>{ const m=mi(e.fecha); if(m<0)return; if(e.tipo==="fijo") gastosFijos[m]+=e.monto; else gastosVar[m]+=e.monto; });
     inversiones.forEach(x=>{ const m=mi(x.fecha); if(m>=0) invers[m]+=x.monto; });
+    aportesArr.forEach(x=>{ const m=mi(x.fecha); if(m>=0) aportes[m]+=(x.monto||0); });
     const totIng=z().map((_,m)=>ventasEfe[m]+ventasEle[m]+entradas[m]);
     const totEgr=z().map((_,m)=>comprasPag[m]+gastosFijos[m]+gastosVar[m]+pagosProv[m]+salidas[m]);
     const flujoOp=z().map((_,m)=>totIng[m]-totEgr[m]);
-    const flujoNeto=z().map((_,m)=>flujoOp[m]-invers[m]);
+    const flujoNeto=z().map((_,m)=>flujoOp[m]-invers[m]+aportes[m]);
     let ac=0; const acum=flujoNeto.map(x=>{ ac+=x; return ac; });
     const filas=[
       {tipo:"header",label:"Ingresos"},
@@ -3287,6 +3512,8 @@ async function viewRepFlujo(v){
       {tipo:"total",label:"Flujo operativo",data:flujoOp,color:"#2E86DE"},
       {tipo:"header",label:"Inversiones"},
       {label:"Inversiones (acciones, cripto, plazo fijo…)",data:invers},
+      {tipo:"header",label:"Financiación"},
+      {label:"Aportes de capital (socios / terceros)",data:aportes,color:"#1f8a48"},
       {tipo:"total",label:"Flujo neto del mes",data:flujoNeto},
       {tipo:"total",label:"Flujo acumulado",data:acum,color:"#8E44AD"},
     ];
@@ -3328,14 +3555,16 @@ async function viewRepResultados(v){
 }
 async function viewRepBalance(v){
   const products=APP.products;
-  const purchases=await DB.all("purchases"), inversiones=await DB.all("inversiones");
+  const purchases=await DB.all("purchases"), inversiones=await DB.all("inversiones"), aportesArr=await DB.all("aportes");
   const sales=(await DB.all("sales")).filter(s=>!s.anulada), expenses=await DB.all("expenses"), movs=await DB.all("movimientos");
+  const aportesTot=aportesArr.reduce((a,x)=>a+(+x.monto||0),0);
   const invValor=products.reduce((a,p)=>a+(p.stock*(p.costoProm||0)),0);
   const invTotal=inversiones.reduce((a,x)=>a+(x.monto||0),0);
   const cxp=purchases.filter(c=>c.formaPago==="credito"&&!c.pagada).reduce((a,c)=>a+(c.total||0),0);
   let efe=0;
   sales.forEach(s=>{ (s.pagos&&s.pagos.length?s.pagos:[{metodo:s.metodoPago,monto:s.total}]).forEach(p=>{ if(p.metodo==="efectivo") efe+=p.monto; }); });
   movs.forEach(x=>{ if(x.tipo==="entrada") efe+=(x.monto||0); else efe-=(x.monto||0); });
+  efe+=aportesTot;
   expenses.forEach(e=>{ efe-=(e.monto||0); });
   purchases.forEach(c=>{ if(c.formaPago==="contado") efe-=(c.total||0); else if(c.pagada) efe-=(c.total||0); });
   efe=Math.round(efe);
@@ -3354,10 +3583,12 @@ async function viewRepBalance(v){
       <div class="card"><div class="card-h"><h3>Pasivo y patrimonio</h3></div><div class="card-b flush"><div class="tbl-wrap"><table><tbody>
         ${row("Cuentas por pagar (proveedores)",cxp,{col:"#c0392b"})}
         ${row("Total pasivo",cxp,{tot:true,col:"#c0392b"})}
+        ${row("Aportes de capital (socios/terceros)",aportesTot)}
+        ${row("Resultados acumulados",patrimonio-aportesTot)}
         ${row("Patrimonio neto (activo − pasivo)",patrimonio,{tot:true,col:"#8E44AD"})}
       </tbody></table></div></div></div>
     </div>
-    <div class="help" style="margin-top:14px;background:#fdf6ec;border-color:#f0dcae;color:#8a6d1e">Aclaración honesta: el <b>efectivo</b> es una estimación del acumulado histórico de caja (no incluye aportes de capital ni retiros que no hayas registrado). Las <b>inversiones</b> figuran como activo aparte: si salieron de la caja del negocio, no lo cuentes doble. Para un balance contable formal harían falta más datos (capital, amortizaciones), pero esta foto ya te sirve para ver patrimonio, deuda e inventario.</div>`;
+    <div class="help" style="margin-top:14px;background:#fdf6ec;border-color:#f0dcae;color:#8a6d1e">Aclaración honesta: el <b>efectivo</b> es una estimación del acumulado histórico de caja e incluye los aportes de capital que hayas registrado (no contempla retiros que no hayas cargado). Las <b>inversiones</b> figuran como activo aparte: si salieron de la caja del negocio, no lo cuentes doble. Para un balance contable formal harían falta más datos (capital, amortizaciones), pero esta foto ya te sirve para ver patrimonio, deuda e inventario.</div>`;
 }
 async function viewBackup(v){
   const counts={};
