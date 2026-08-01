@@ -428,6 +428,26 @@ const fmtDateTime = iso => { const d=new Date(iso); return d.toLocaleString("es-
 const fmtDate = iso => new Date(iso).toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit",year:"numeric"});
 const sameDay = (iso,day) => iso && iso.slice(0,10)===day;
 
+function mesLabel(ym){ const M=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]; if(!ym) return ""; const y=ym.slice(0,4),mm=+ym.slice(5,7); return (M[mm-1]||ym)+" "+y; }
+function _autoCap(el){
+  const v=el.value; if(!v) return;
+  const nv=v.replace(/(^|\s)([\wáéíóúüñ])/g,(m,p1,p2)=>p1+p2.toUpperCase());
+  if(nv!==v){ const pos=el.selectionStart; el.value=nv; try{el.setSelectionRange(pos,pos);}catch(e){} }
+}
+if(!window.__autoCapOn){
+  window.__autoCapOn=true;
+  document.addEventListener("input",e=>{
+    const el=e.target; if(!el || el.tagName!=="INPUT") return;
+    const t=(el.getAttribute("type")||"text").toLowerCase();
+    if(["password","email","url","number","date","tel","time"].includes(t)) return;
+    const im=(el.getAttribute("inputmode")||"").toLowerCase();
+    if(im==="decimal"||im==="numeric") return;
+    const id=(el.id||"").toLowerCase();
+    if(id.includes("search")||id.includes("scan")||id.includes("pin")||id.includes("pass")||id.includes("cod")||id.includes("config")||id.includes("iva")||id.includes("plazo")||id.includes("dias")||id.includes("monto")||id.includes("total")||id.includes("precio")||id.includes("costo")||id.includes("cant")) return;
+    if(el.dataset && el.dataset.nocap!==undefined) return;
+    _autoCap(el);
+  });
+}
 function toast(msg,type){
   const t=document.createElement("div"); t.className="toast"+(type?" "+type:""); t.textContent=msg;
   document.body.appendChild(t); setTimeout(()=>t.remove(),2200);
@@ -1890,10 +1910,19 @@ async function viewCompras(v){
   const purchases=(await DB.all("purchases")).sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
   const suppliers=await DB.all("suppliers");
   const SEL=new Set(); let visibles=[];
+  const provs=[...new Set(purchases.map(c=>c.proveedorNombre||c.proveedor||"").filter(Boolean))].sort();
+  const meses=[...new Set(purchases.map(c=>(c.fecha||"").slice(0,7)).filter(Boolean))].sort().reverse();
   v.innerHTML=`
-    <div class="help">Al registrar una compra con productos, el sistema <b>recalcula el costo promedio</b>. Abajo tenés el <b>historial completo</b>; podés seleccionar, editar o borrar filas.</div>
-    <div class="toolbar">
-      <div class="search"><input id="compSearch" placeholder="Buscar por proveedor…"></div>
+    <div class="help">Historial completo de compras. Filtrá por proveedor y por mes; las tarjetas de arriba se ajustan al filtro. Cada fila es editable.</div>
+    <div class="grid kpis">
+      <div class="kpi"><div class="lab">Total comprado</div><div class="val" id="kTotal">$0</div></div>
+      <div class="kpi cel"><div class="lab">Contado</div><div class="val" id="kContado">$0</div></div>
+      <div class="kpi warn"><div class="lab">Crédito</div><div class="val" id="kCredito">$0</div></div>
+      <div class="kpi"><div class="lab">Nº de compras</div><div class="val" id="kCount">0</div></div>
+    </div>
+    <div class="toolbar" style="margin-top:12px">
+      <select id="fProv"><option value="">Todos los proveedores</option>${provs.map(p=>`<option>${esc(p)}</option>`).join("")}</select>
+      <select id="fMes"><option value="">Todos los períodos</option>${meses.map(m=>`<option value="${m}">${mesLabel(m)}</option>`).join("")}</select>
       <button class="btn" id="newPurchase">+ Registrar compra</button>
       <button class="btn gh" id="impCompras">Importar Excel</button>
       <button class="btn gray" id="tplCompras">Plantilla Excel</button>
@@ -1905,10 +1934,15 @@ async function viewCompras(v){
     </div>
     <div class="card"><div class="card-b flush"><div class="tbl-wrap"><table><thead><tr><th class="selcol"></th><th>Fecha registro</th><th>Fecha ingreso</th><th>Proveedor</th><th class="num">Total</th><th>Pago</th><th>Usuario</th><th></th></tr></thead><tbody id="compBody"></tbody></table></div></div></div>`;
   function draw(){
-    const q=($("compSearch").value||"").toLowerCase().trim();
+    const prov=$("fProv").value, mes=$("fMes").value;
     let list=purchases;
-    if(q) list=list.filter(c=>String(c.proveedorNombre||c.proveedor||"").toLowerCase().includes(q));
+    if(prov) list=list.filter(c=>(c.proveedorNombre||c.proveedor||"")===prov);
+    if(mes) list=list.filter(c=>(c.fecha||"").slice(0,7)===mes);
     visibles=list;
+    const tot=list.reduce((a,c)=>a+purchaseTotal(c),0);
+    const cont=list.filter(c=>c.formaPago!=="credito").reduce((a,c)=>a+purchaseTotal(c),0);
+    const cred=list.filter(c=>c.formaPago==="credito").reduce((a,c)=>a+purchaseTotal(c),0);
+    $("kTotal").textContent=money(tot); $("kContado").textContent=money(cont); $("kCredito").textContent=money(cred); $("kCount").textContent=list.length;
     $("compBody").innerHTML=list.map(c=>{const on=SEL.has(c.id);return `<tr class="${on?'selrow':''}">
       <td class="selcol"><span class="selcirc ${on?'on':''}" data-sel="${c.id}"></span></td>
       <td class="mini">${c.fechaRegistro?fmtDateTime(c.fechaRegistro):"—"}</td>
@@ -1917,7 +1951,7 @@ async function viewCompras(v){
       <td class="num">${money(purchaseTotal(c))}</td>
       <td>${c.formaPago==="credito"?(c.pagada?'<span class="badge ok">crédito · pagada</span>':'<span class="badge warn">crédito · a pagar</span>'):'<span class="badge cel">contado</span>'}</td>
       <td class="mini">${esc(userName(c.usuario))}</td>
-      <td class="right"><button class="btn sm gray" data-editp="${c.id}">Editar</button></td></tr>`;}).join("")||`<tr><td colspan="8"><div class="empty">Sin compras.</div></td></tr>`;
+      <td class="right"><button class="btn sm gray" data-editp="${c.id}">Editar</button></td></tr>`;}).join("")||`<tr><td colspan="8"><div class="empty">Sin compras para este filtro.</div></td></tr>`;
     $("compBody").querySelectorAll("[data-editp]").forEach(b=>b.onclick=()=>{ const c=purchases.find(x=>x.id===b.dataset.editp); if(c.items&&c.items.length>0) editPurchaseModal(c); else editPurchaseSimple(c,suppliers); });
     $("compBody").querySelectorAll("[data-sel]").forEach(s=>s.onclick=()=>{ const id=s.dataset.sel; if(SEL.has(id))SEL.delete(id);else SEL.add(id); draw(); });
     const n=SEL.size; $("cSelCount").textContent=n?`· ${n} seleccionada${n>1?"s":""}`:""; $("cSelActions").style.display=n?"flex":"none";
@@ -1928,7 +1962,7 @@ async function viewCompras(v){
   $("cSelClear").onclick=()=>{ SEL.clear(); draw(); };
   $("cSelDel").onclick=async()=>{ const ids=[...SEL]; if(!ids.length)return; if(!confirm(`¿Seguro que querés borrar ${ids.length} compra${ids.length>1?"s":""}? Esta acción NO se puede deshacer.`))return; for(const id of ids) await DB.del("purchases",id); SEL.clear(); await refreshState(); toast(`${ids.length} compra${ids.length>1?"s":""} borrada${ids.length>1?"s":""}`,"ok"); go("compras"); };
   if(!window.__purchaseListener){ window.__purchaseListener=true; window.addEventListener("message", async e=>{ if(e && e.data && e.data.__purchase){ await applyPurchase(e.data.data); } }); }
-  $("compSearch").oninput=draw; draw();
+  $("fProv").onchange=()=>{SEL.clear();draw();}; $("fMes").onchange=()=>{SEL.clear();draw();}; draw();
   $("newPurchase").onclick=()=>openPurchaseWindow(suppliers);
   $("impCompras").onclick=importCompras;
   $("tplCompras").onclick=downloadComprasTemplate;
@@ -2478,32 +2512,39 @@ async function gastosAnalysis(defFrom,defTo){
 async function viewGastos(v){
   const exp=(await DB.all("expenses")).sort((a,b)=>b.fecha.localeCompare(a.fecha));
   const cats=GASTO_CATS;
-  const mesActual=todayStr().slice(0,7);
-  const delMes=exp.filter(e=>e.fecha.slice(0,7)===mesActual);
-  const totalMes=delMes.reduce((a,e)=>a+e.monto,0);
-  const fijosMes=delMes.filter(e=>e.tipo!=="variable").reduce((a,e)=>a+e.monto,0);
+  const meses=[...new Set(exp.map(e=>(e.fecha||"").slice(0,7)).filter(Boolean))].sort().reverse();
   v.innerHTML=`
     <div class="grid kpis">
-      <div class="kpi"><div class="lab">Gastos del mes</div><div class="val">${money(totalMes)}</div></div>
-      <div class="kpi ok"><div class="lab">Fijos del mes</div><div class="val">${money(fijosMes)}</div></div>
-      <div class="kpi warn"><div class="lab">Variables del mes</div><div class="val">${money(totalMes-fijosMes)}</div></div>
+      <div class="kpi"><div class="lab">Total gastos</div><div class="val" id="gkTotal">$0</div></div>
+      <div class="kpi ok"><div class="lab">Fijos</div><div class="val" id="gkFijos">$0</div></div>
+      <div class="kpi warn"><div class="lab">Variables</div><div class="val" id="gkVar">$0</div></div>
+      <div class="kpi"><div class="lab">Nº de gastos</div><div class="val" id="gkCount">0</div></div>
     </div>
-    <div class="toolbar" style="margin-top:16px"><button class="btn" id="newExp">+ Registrar gasto</button><button class="btn gh" id="impGastos">Importar Excel</button><button class="btn gray" id="tplGastos">Plantilla Excel</button><button class="btn gh" id="gAnal">🔍 Analizar fijos/variables</button><button class="btn gray" id="expGastos">Exportar Excel</button><button class="btn gray" id="expCsv">Exportar CSV</button></div>
+    <div class="toolbar" style="margin-top:16px">
+      <select id="gCat"><option value="">Todas las categorías</option>${cats.map(c=>`<option>${esc(c)}</option>`).join("")}</select>
+      <select id="gTipo"><option value="">Todos los tipos</option><option value="fijo">Fijo</option><option value="variable">Variable</option></select>
+      <select id="gMes"><option value="">Todos los períodos</option>${meses.map(m=>`<option value="${m}">${mesLabel(m)}</option>`).join("")}</select>
+      <button class="btn" id="newExp">+ Registrar gasto</button><button class="btn gh" id="impGastos">Importar Excel</button><button class="btn gray" id="tplGastos">Plantilla Excel</button><button class="btn gh" id="gAnal">🔍 Analizar fijos/variables</button><button class="btn gray" id="expGastos">Exportar Excel</button><button class="btn gray" id="expCsv">Exportar CSV</button></div>
     <div class="selbar">
       <div style="display:flex;align-items:center;gap:9px"><span class="selcirc" id="gSelAll"></span><span class="sellabel" id="gSelAllLbl">Seleccionar todo</span><span class="mini" id="gSelCount"></span></div>
       <div id="gSelActions" style="display:none;gap:8px"><button class="btn sm danger" id="gSelDel">🗑 Borrar seleccionados</button><button class="btn sm gray" id="gSelClear">Cancelar</button></div>
     </div>
     <div class="card"><div class="card-b flush"><div class="tbl-wrap"><table><thead><tr><th class="selcol"></th><th>Fecha registro</th><th>Fecha ingreso</th><th>Categoría</th><th>Tipo</th><th>Descripción</th><th class="num">Monto</th><th>Usuario</th><th></th></tr></thead><tbody id="gastBody"></tbody></table></div></div></div>`;
   const GSEL=new Set();
+  let gvis=exp;
+  function gfilter(){ const c=$("gCat").value,t=$("gTipo").value,m=$("gMes").value; let L=exp; if(c)L=L.filter(e=>e.categoria===c); if(t)L=L.filter(e=>(e.tipo||"fijo")===t); if(m)L=L.filter(e=>(e.fecha||"").slice(0,7)===m); gvis=L; return L; }
   function gdraw(){
-    $("gastBody").innerHTML=exp.map(e=>{const on=GSEL.has(e.id);return `<tr class="${on?'selrow':''}"><td class="selcol"><span class="selcirc ${on?'on':''}" data-sel="${e.id}"></span></td><td class="mini">${e.fechaRegistro?fmtDateTime(e.fechaRegistro):"—"}</td><td>${fmtDate(e.fecha)}</td><td><span class="badge cel">${esc(e.categoria)}</span></td><td>${e.tipo==="variable"?'<span class="badge warn">Variable</span>':'<span class="badge ok">Fijo</span>'}</td><td>${esc(e.descripcion)}</td><td class="num">${money(e.monto)}</td><td class="mini">${esc(userName(e.usuario))}</td><td class="right"><button class="btn sm gray" data-edx="${e.id}">Editar</button> <button class="rm" data-del="${e.id}">×</button></td></tr>`;}).join("")||`<tr><td colspan="9"><div class="empty">Sin gastos.</div></td></tr>`;
+    const L=gfilter();
+    const tot=L.reduce((a,e)=>a+(+e.monto||0),0), fij=L.filter(e=>(e.tipo||"fijo")!=="variable").reduce((a,e)=>a+(+e.monto||0),0);
+    $("gkTotal").textContent=money(tot); $("gkFijos").textContent=money(fij); $("gkVar").textContent=money(tot-fij); $("gkCount").textContent=L.length;
+    $("gastBody").innerHTML=L.map(e=>{const on=GSEL.has(e.id);return `<tr class="${on?'selrow':''}"><td class="selcol"><span class="selcirc ${on?'on':''}" data-sel="${e.id}"></span></td><td class="mini">${e.fechaRegistro?fmtDateTime(e.fechaRegistro):"—"}</td><td>${fmtDate(e.fecha)}</td><td><span class="badge cel">${esc(e.categoria)}</span></td><td>${e.tipo==="variable"?'<span class="badge warn">Variable</span>':'<span class="badge ok">Fijo</span>'}</td><td>${esc(e.descripcion)}</td><td class="num">${money(e.monto)}</td><td class="mini">${esc(userName(e.usuario))}</td><td class="right"><button class="btn sm gray" data-edx="${e.id}">Editar</button> <button class="rm" data-del="${e.id}">×</button></td></tr>`;}).join("")||`<tr><td colspan="9"><div class="empty">Sin gastos para este filtro.</div></td></tr>`;
     const n=GSEL.size; $("gSelCount").textContent=n?`· ${n} seleccionado${n>1?"s":""}`:""; $("gSelActions").style.display=n?"flex":"none";
-    $("gSelAll").classList.toggle("on", exp.length>0 && exp.every(e=>GSEL.has(e.id)));
+    $("gSelAll").classList.toggle("on", L.length>0 && L.every(e=>GSEL.has(e.id)));
     $("gastBody").querySelectorAll("[data-sel]").forEach(s=>s.onclick=()=>{const id=s.dataset.sel; if(GSEL.has(id))GSEL.delete(id);else GSEL.add(id); gdraw();});
     $("gastBody").querySelectorAll("[data-edx]").forEach(b=>b.onclick=()=>editExpenseModal(exp.find(x=>x.id===b.dataset.edx)));
     $("gastBody").querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{if(confirm("¿Eliminar gasto?")){await DB.del("expenses",b.dataset.del);await refreshState();go("gastos");}});
   }
-  const gToggle=()=>{const all=exp.length>0&&exp.every(e=>GSEL.has(e.id)); if(all)GSEL.clear();else exp.forEach(e=>GSEL.add(e.id)); gdraw();};
+  const gToggle=()=>{const all=gvis.length>0&&gvis.every(e=>GSEL.has(e.id)); if(all)gvis.forEach(e=>GSEL.delete(e.id));else gvis.forEach(e=>GSEL.add(e.id)); gdraw();};
   $("impGastos").onclick=importGastos;
   $("tplGastos").onclick=downloadGastosTemplate;
   $("newExp").onclick=()=>{
@@ -2524,6 +2565,7 @@ async function viewGastos(v){
   $("gAnal").onclick=()=>gastosAnalysis();
   $("expCsv").onclick=()=>{const rows=[["fecha","categoria","tipo","grupo","descripcion","monto","caja","usuario"]];exp.forEach(e=>rows.push([e.fecha,e.categoria,e.tipo||"fijo",grupoGasto(e.categoria),e.descripcion,e.monto,e.caja||"fisica",userName(e.usuario)]));downloadCSV("gastos-"+todayStr()+".csv",rows);};
   $("expGastos").onclick=()=>{const rows=[["Fecha de Pago","Descripción","Monto","Categoria","Tipo"]];exp.forEach(e=>rows.push([(e.fecha||"").slice(0,10),e.descripcion,e.monto,e.categoria,e.tipo==="variable"?"Variable":"Fijo"]));downloadXLSX("gastos-"+todayStr()+".xlsx","Gastos",rows);};
+  $("gCat").onchange=gdraw; $("gTipo").onchange=gdraw; $("gMes").onchange=gdraw;
   $("gSelAll").onclick=gToggle; $("gSelAllLbl").onclick=gToggle;
   $("gSelClear").onclick=()=>{GSEL.clear();gdraw();};
   $("gSelDel").onclick=async()=>{const ids=[...GSEL]; if(!ids.length)return; if(!confirm(`¿Seguro que querés borrar ${ids.length} gasto${ids.length>1?"s":""}? Esta acción NO se puede deshacer.`))return; for(const id of ids) await DB.del("expenses",id); GSEL.clear(); await refreshState(); toast(`${ids.length} gasto${ids.length>1?"s":""} borrado${ids.length>1?"s":""}`,"ok"); go("gastos");};
@@ -3439,7 +3481,7 @@ function matrizMensual(titulo, filas){
 }
 async function viewRepGeneral(v){
   const sales=(await DB.all("sales")).filter(s=>!s.anulada);
-  const expenses=await DB.all("expenses");
+  const expenses=await DB.all("expenses"), purchases=await DB.all("purchases");
   const today=todayStr();
   v.innerHTML=`
     <div class="toolbar"><div class="field" style="margin:0"><label>Desde</label><input type="date" id="rg_d1" value="${today.slice(0,8)+'01'}"></div>
@@ -3458,6 +3500,9 @@ async function viewRepGeneral(v){
     const segs=Object.entries(porMet).map(([k,val])=>({label:PAY_LABEL[k]||k,value:val,color:COLM[k]||"#888"})).filter(s=>s.value>0);
     const prodMap={}; sv.forEach(s=>{ (s.stockMov||[]).forEach(m=>{ prodMap[m.productId]=(prodMap[m.productId]||0)+m.cant; }); });
     const tops=Object.entries(prodMap).map(([id,cant])=>{ const p=APP.products.find(x=>x.id===id); return {nombre:p?p.descripcion:"(borrado)",cant}; }).sort((a,b)=>b.cant-a.cant).slice(0,10);
+    const pc=purchases.filter(c=>inR(c.fecha)); const pedido={}, pagado={};
+    pc.forEach(c=>{ const nom=c.proveedorNombre||c.proveedor||"—"; const t=purchaseTotal(c); pedido[nom]=(pedido[nom]||0)+t; if(c.formaPago!=="credito"||c.pagada) pagado[nom]=(pagado[nom]||0)+t; });
+    const topPed=Object.entries(pedido).sort((a,b)=>b[1]-a[1]).slice(0,8), topPag=Object.entries(pagado).sort((a,b)=>b[1]-a[1]).slice(0,8);
     $("rg_out").innerHTML=`
       <div class="grid kpis">
         <div class="kpi cel"><div class="lab">Ventas</div><div class="val">${money(ventas)}</div><div class="sub">${nV} ventas</div></div>
@@ -3478,6 +3523,16 @@ async function viewRepGeneral(v){
         <div class="card"><div class="card-h"><h3>Productos más vendidos</h3></div><div class="card-b flush"><div class="tbl-wrap"><table>
           <thead><tr><th>Producto</th><th class="num">Unidades</th></tr></thead><tbody>
           ${tops.map(t=>`<tr><td>${esc(t.nombre)}</td><td class="num" style="font-weight:700">${t.cant}</td></tr>`).join("")||`<tr><td colspan="2"><div class="empty">Sin ventas.</div></td></tr>`}
+        </tbody></table></div></div></div>
+      </div>
+      <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;align-items:start">
+        <div class="card"><div class="card-h"><h3>Proveedores a los que más compramos</h3></div><div class="card-b flush"><div class="tbl-wrap"><table>
+          <thead><tr><th>Proveedor</th><th class="num">Comprado</th></tr></thead><tbody>
+          ${topPed.map(([n,val])=>`<tr><td>${esc(n)}</td><td class="num" style="font-weight:700">${money(val)}</td></tr>`).join("")||`<tr><td colspan="2"><div class="empty">Sin compras en el período.</div></td></tr>`}
+        </tbody></table></div></div></div>
+        <div class="card"><div class="card-h"><h3>Proveedores a los que más pagamos</h3></div><div class="card-b flush"><div class="tbl-wrap"><table>
+          <thead><tr><th>Proveedor</th><th class="num">Pagado</th></tr></thead><tbody>
+          ${topPag.map(([n,val])=>`<tr><td>${esc(n)}</td><td class="num" style="font-weight:700">${money(val)}</td></tr>`).join("")||`<tr><td colspan="2"><div class="empty">Sin pagos en el período.</div></td></tr>`}
         </tbody></table></div></div></div>
       </div>`;
   };
