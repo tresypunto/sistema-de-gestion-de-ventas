@@ -2437,14 +2437,14 @@ function salidaModal(){
    GASTOS
    ========================================================= */
 /* ---- Gastos: categorías, grupos y análisis ---- */
-const GASTO_CATS = ["Alquiler","Expensas","Rentas","Monotributo","Internet","Luz","Agua","Mano de obra","Municipalidad","Cámaras","Activo fijo","Mantenimiento","Marketing"];
+const GASTO_CATS = ["Pagos Administrativos","Pagos Comerciales","Pagos de Mantenimiento","Pagos de Marketing"];
 const GASTO_GRUPO = {
+  "Pagos Administrativos":"Administrativos","Pagos Comerciales":"Comerciales","Pagos de Mantenimiento":"Mantenimiento","Pagos de Marketing":"Marketing",
+  "Mano de obra":"Comerciales","Marketing":"Marketing","Mantenimiento":"Mantenimiento","Cámaras":"Mantenimiento","Activo fijo":"Activos",
   "Alquiler":"Administrativos","Expensas":"Administrativos","Rentas":"Administrativos","Monotributo":"Administrativos",
-  "Internet":"Administrativos","Luz":"Administrativos","Agua":"Administrativos","Mano de obra":"Administrativos","Municipalidad":"Administrativos",
-  "Marketing":"Comerciales",
-  "Cámaras":"Mantenimiento","Activo fijo":"Mantenimiento","Mantenimiento":"Mantenimiento"
+  "Internet":"Administrativos","Luz":"Administrativos","Agua":"Administrativos","Municipalidad":"Administrativos","Administrativo":"Administrativos"
 };
-const GASTO_TIPO_DEF = {"Cámaras":"variable","Activo fijo":"variable","Mantenimiento":"variable","Marketing":"variable","Municipalidad":"variable"};
+const GASTO_TIPO_DEF = {"Pagos Administrativos":"fijo","Pagos Comerciales":"fijo","Pagos de Mantenimiento":"variable","Pagos de Marketing":"variable"};
 function grupoGasto(cat){ return GASTO_GRUPO[cat]||"Administrativos"; }
 function mLabel(m){ const p=(m||"").split("-"); const N=["","ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"]; return (N[+p[1]]||"")+" "+(p[0]||"").slice(2); }
 function monthsBetween(m1,m2){ const out=[]; let a=m1.split("-").map(Number), b=m2.split("-").map(Number); let y=a[0],mo=a[1]; while(y<b[0]||(y===b[0]&&mo<=b[1])){ out.push(y+"-"+String(mo).padStart(2,"0")); mo++; if(mo>12){mo=1;y++;} if(out.length>60)break; } return out; }
@@ -3540,23 +3540,24 @@ async function viewRepGeneral(v){
 }
 async function viewRepFlujo(v){
   const sales=(await DB.all("sales")).filter(s=>!s.anulada);
-  const expenses=await DB.all("expenses"), purchases=await DB.all("purchases"), movs=await DB.all("movimientos"), inversiones=await DB.all("inversiones"), aportesArr=await DB.all("aportes");
-  const years=_yearsData(sales,expenses,purchases,movs,inversiones,aportesArr);
+  const expenses=await DB.all("expenses"), purchases=await DB.all("purchases"), movs=await DB.all("movimientos"), inversiones=await DB.all("inversiones"), aportesArr=await DB.all("aportes"), activosArr=await DB.all("activos");
+  const years=_yearsData(sales,expenses,purchases,movs,inversiones,aportesArr,activosArr);
   v.innerHTML=`<div class="help">Flujo de fondos mensual (base <b>caja</b>: entradas y salidas reales de dinero). Ordenado por actividad. Filtrá el año y mirá los 12 meses uno al lado del otro.</div>
     <div class="toolbar"><div class="field" style="margin:0"><label>Año</label><select id="ff_y">${years.map(y=>`<option>${y}</option>`).join("")}</select></div></div><div id="ff_out"></div>`;
   const render=()=>{
     const Y=$("ff_y").value, mi=f=>_mesIdx(f,Y), z=()=>Array(12).fill(0);
-    const ventasEfe=z(), ventasEle=z(), entradas=z(), comprasPag=z(), gastosFijos=z(), gastosVar=z(), pagosProv=z(), salidas=z(), invers=z(), aportes=z();
+    const ventasEfe=z(), ventasEle=z(), entradas=z(), comprasPag=z(), gastosFijos=z(), gastosVar=z(), pagosProv=z(), salidas=z(), invers=z(), aportes=z(), activCapex=z();
     sales.forEach(s=>{ const m=mi(s.fecha); if(m<0)return; (s.pagos&&s.pagos.length?s.pagos:[{metodo:s.metodoPago,monto:s.total}]).forEach(p=>{ if(p.metodo==="efectivo") ventasEfe[m]+=p.monto; else ventasEle[m]+=p.monto; }); });
     movs.forEach(x=>{ const m=mi(x.fecha); if(m<0)return; if(x.tipo==="entrada") entradas[m]+=x.monto; else salidas[m]+=x.monto; });
     purchases.forEach(c=>{ if(c.formaPago==="contado"){ const m=mi(c.fecha); if(m>=0) comprasPag[m]+=(c.total||0); } else if(c.pagada){ const m=mi(c.paidFecha||c.fecha); if(m>=0) pagosProv[m]+=(c.total||0); } });
     expenses.forEach(e=>{ const m=mi(e.fecha); if(m<0)return; if(e.tipo==="fijo") gastosFijos[m]+=e.monto; else gastosVar[m]+=e.monto; });
     inversiones.forEach(x=>{ const m=mi(x.fecha); if(m>=0) invers[m]+=x.monto; });
     aportesArr.forEach(x=>{ const m=mi(x.fecha); if(m>=0) aportes[m]+=(x.monto||0); });
+    activosArr.forEach(a=>{ const m=mi(a.fecha); if(m>=0) activCapex[m]+=(+a.costo||0)*(+a.cantidad||1); });
     const totIng=z().map((_,m)=>ventasEfe[m]+ventasEle[m]+entradas[m]);
     const totEgr=z().map((_,m)=>comprasPag[m]+gastosFijos[m]+gastosVar[m]+pagosProv[m]+salidas[m]);
     const flujoOp=z().map((_,m)=>totIng[m]-totEgr[m]);
-    const flujoNeto=z().map((_,m)=>flujoOp[m]-invers[m]+aportes[m]);
+    const flujoNeto=z().map((_,m)=>flujoOp[m]-invers[m]-activCapex[m]+aportes[m]);
     let ac=0; const acum=flujoNeto.map(x=>{ ac+=x; return ac; });
     const filas=[
       {tipo:"header",label:"Ingresos"},
@@ -3574,6 +3575,7 @@ async function viewRepFlujo(v){
       {tipo:"total",label:"Flujo operativo",data:flujoOp,color:"#2E86DE"},
       {tipo:"header",label:"Inversiones"},
       {label:"Inversiones (acciones, cripto, plazo fijo…)",data:invers},
+      {label:"Inversión en activos fijos",data:activCapex},
       {tipo:"header",label:"Financiación"},
       {label:"Aportes de capital (socios / terceros)",data:aportes,color:"#1f8a48"},
       {tipo:"total",label:"Flujo neto del mes",data:flujoNeto},
@@ -3591,12 +3593,12 @@ async function viewRepResultados(v){
     <div class="toolbar"><div class="field" style="margin:0"><label>Año</label><select id="er_y">${years.map(y=>`<option>${y}</option>`).join("")}</select></div></div><div id="er_out"></div>`;
   const render=()=>{
     const Y=$("er_y").value, mi=f=>_mesIdx(f,Y), z=()=>Array(12).fill(0);
-    const ventas=z(), cmv=z(), gAdm=z(), gCom=z(), gMan=z(), perd=z();
+    const ventas=z(), cmv=z(), gAdm=z(), gCom=z(), gMan=z(), gMkt=z(), perd=z();
     sales.forEach(s=>{ const m=mi(s.fecha); if(m<0)return; ventas[m]+=s.total; cmv[m]+=(s.costoTotal||0); });
-    expenses.forEach(e=>{ const m=mi(e.fecha); if(m<0)return; const g=grupoGasto(e.categoria); if(g==="Comerciales")gCom[m]+=e.monto; else if(g==="Mantenimiento")gMan[m]+=e.monto; else gAdm[m]+=e.monto; });
+    expenses.forEach(e=>{ const m=mi(e.fecha); if(m<0)return; const g=grupoGasto(e.categoria); if(g==="Activos")return; if(g==="Comerciales")gCom[m]+=e.monto; else if(g==="Mantenimiento")gMan[m]+=e.monto; else if(g==="Marketing")gMkt[m]+=e.monto; else gAdm[m]+=e.monto; });
     perdidas.forEach(x=>{ const m=mi(x.fecha); if(m>=0) perd[m]+=(x.cantidad||0)*(x.costoUnit||0); });
     const margen=z().map((_,m)=>ventas[m]-cmv[m]);
-    const totGastos=z().map((_,m)=>gAdm[m]+gCom[m]+gMan[m]);
+    const totGastos=z().map((_,m)=>gAdm[m]+gCom[m]+gMan[m]+gMkt[m]);
     const resOp=z().map((_,m)=>margen[m]-totGastos[m]);
     const resNeto=z().map((_,m)=>resOp[m]-perd[m]);
     const filas=[
@@ -3604,9 +3606,10 @@ async function viewRepResultados(v){
       {label:"(−) CMV (costo de lo vendido)",data:cmv.map(x=>-x),color:"#c0392b"},
       {tipo:"total",label:"= Margen bruto",data:margen,color:"#1f8a48"},
       {tipo:"header",label:"Gastos operativos"},
-      {label:"Administrativos",data:gAdm.map(x=>-x)},
-      {label:"Comerciales",data:gCom.map(x=>-x)},
-      {label:"Mantenimiento",data:gMan.map(x=>-x)},
+      {label:"Pagos Administrativos",data:gAdm.map(x=>-x)},
+      {label:"Pagos Comerciales (sueldos)",data:gCom.map(x=>-x)},
+      {label:"Pagos de Mantenimiento",data:gMan.map(x=>-x)},
+      {label:"Pagos de Marketing",data:gMkt.map(x=>-x)},
       {tipo:"total",label:"= Resultado operativo",data:resOp,color:"#2E86DE"},
       {label:"(−) Pérdidas de inventario",data:perd.map(x=>-x),color:"#c0392b"},
       {tipo:"total",label:"= Resultado neto",data:resNeto,color:"#8E44AD"},
@@ -3617,9 +3620,10 @@ async function viewRepResultados(v){
 }
 async function viewRepBalance(v){
   const products=APP.products;
-  const purchases=await DB.all("purchases"), inversiones=await DB.all("inversiones"), aportesArr=await DB.all("aportes");
+  const purchases=await DB.all("purchases"), inversiones=await DB.all("inversiones"), aportesArr=await DB.all("aportes"), activosArr=await DB.all("activos");
   const sales=(await DB.all("sales")).filter(s=>!s.anulada), expenses=await DB.all("expenses"), movs=await DB.all("movimientos");
   const aportesTot=aportesArr.reduce((a,x)=>a+(+x.monto||0),0);
+  const activFijos=activosArr.filter(a=>a.propiedad!=="Comodato").reduce((s,a)=>s+(+a.costo||0)*(+a.cantidad||1),0);
   const invValor=products.reduce((a,p)=>a+(p.stock*(p.costoProm||0)),0);
   const invTotal=inversiones.reduce((a,x)=>a+(x.monto||0),0);
   const cxp=purchases.filter(c=>c.formaPago==="credito"&&!c.pagada).reduce((a,c)=>a+(c.total||0),0);
@@ -3627,10 +3631,11 @@ async function viewRepBalance(v){
   sales.forEach(s=>{ (s.pagos&&s.pagos.length?s.pagos:[{metodo:s.metodoPago,monto:s.total}]).forEach(p=>{ if(p.metodo==="efectivo") efe+=p.monto; }); });
   movs.forEach(x=>{ if(x.tipo==="entrada") efe+=(x.monto||0); else efe-=(x.monto||0); });
   efe+=aportesTot;
+  efe-=activFijos;
   expenses.forEach(e=>{ efe-=(e.monto||0); });
   purchases.forEach(c=>{ if(c.formaPago==="contado") efe-=(c.total||0); else if(c.pagada) efe-=(c.total||0); });
   efe=Math.round(efe);
-  const activo=efe+invValor+invTotal;
+  const activo=efe+invValor+invTotal+activFijos;
   const patrimonio=activo-cxp;
   const row=(l,val,opts)=>`<tr style="${opts&&opts.tot?'font-weight:800;background:#faf7f3':''}"><td style="${opts&&opts.col?'color:'+opts.col:''}">${esc(l)}</td><td class="num" style="${opts&&opts.col?'color:'+opts.col+';':''}${opts&&opts.tot?'font-weight:800':''}">${money(Math.round(val))}</td></tr>`;
   v.innerHTML=`
@@ -3640,6 +3645,7 @@ async function viewRepBalance(v){
         ${row("Efectivo operativo (estimado)",efe)}
         ${row("Inventario valorizado (stock × costo)",invValor)}
         ${row("Inversiones",invTotal)}
+        ${row("Activos fijos (propios)",activFijos)}
         ${row("Total activo",activo,{tot:true,col:"#1f8a48"})}
       </tbody></table></div></div></div>
       <div class="card"><div class="card-h"><h3>Pasivo y patrimonio</h3></div><div class="card-b flush"><div class="tbl-wrap"><table><tbody>
