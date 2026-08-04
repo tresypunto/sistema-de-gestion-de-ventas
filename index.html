@@ -373,7 +373,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
    ========================================================= */
 
 /* ---------- Capa de datos en la NUBE (Firestore + tiempo real) ---------- */
-const STORES = ["products","sales","shifts","cashCloses","expenses","users","priceHistory","purchases","suppliers","combos","movimientos","ajustes","inversiones","perdidas","activos","aportes","meta"];
+const STORES = ["products","sales","shifts","cashCloses","expenses","users","priceHistory","purchases","suppliers","combos","movimientos","ajustes","inversiones","perdidas","activos","aportes","concesiones","meta"];
 const MIRROR = {}; STORES.forEach(s=>MIRROR[s]=[]);
 let _db=null, _auth=null, _ready=false;
 const _firstSnap={};
@@ -473,6 +473,7 @@ const NAV = [
   {id:"trazabilidad",label:"Trazabilidad", ic:"🧭", roles:["propietario"], grp:"productos"},
   {id:"proveedores",label:"Proveedores", ic:"🤝", roles:["propietario","gerente"], grp:"proveedores"},
   {id:"cuentas",   label:"Cuentas por pagar", ic:"📆", roles:["propietario","gerente"], grp:"proveedores"},
+  {id:"concesiones",label:"Concesiones", ic:"🤝", roles:["propietario","gerente","supervisor"], grp:"proveedores"},
   {id:"turnos",    label:"Turnos", ic:"⏱", roles:["propietario","gerente","supervisor","cajero"]},
   {id:"caja",      label:"Cierre de caja", ic:"💵", roles:["propietario","gerente","supervisor","cajero"]},
   {id:"gastos",    label:"Gastos", ic:"🧾", roles:["propietario","gerente","supervisor"]},
@@ -751,7 +752,7 @@ async function go(page){
   const ni=NAV.find(n=>n.id===page);
   if(ni && APP.user && !ni.roles.includes(APP.user.rol)) page=landingPage();
   APP.page=page; setActive();
-  const titles={dashboard:"Panel",pos:"Punto de venta",inventario:"Catálogo",combos:"Promociones y Combos",compras:"Compras",ajustes:"Ajuste de inventario",auditoria:"Auditoría de Stock",perdidas:"Pérdidas",trazabilidad:"Trazabilidad",cuentas:"Cuentas por pagar",proveedores:"Proveedores",ventas:"Historial de ventas",turnos:"Turnos",caja:"Cierre de caja",gastos:"Gastos",ctacte:"Cuenta corriente del equipo",inversiones:"Inversiones",activos:"Activos fijos",aportes:"Aporte de capital",rep_general:"Reportes generales",rep_flujo:"Flujo de fondos",rep_resultados:"Estado de resultados",rep_balance:"Balance",equipo:"Mi equipo",usuarios:"Usuarios",backup:"Respaldo de datos"};
+  const titles={dashboard:"Panel",pos:"Punto de venta",inventario:"Catálogo",combos:"Promociones y Combos",compras:"Compras",ajustes:"Ajuste de inventario",auditoria:"Auditoría de Stock",perdidas:"Pérdidas",trazabilidad:"Trazabilidad",cuentas:"Cuentas por pagar",proveedores:"Proveedores",ventas:"Historial de ventas",turnos:"Turnos",caja:"Cierre de caja",gastos:"Gastos",ctacte:"Cuenta corriente del equipo",inversiones:"Inversiones",activos:"Activos fijos",aportes:"Aporte de capital",concesiones:"Concesiones",rep_general:"Reportes generales",rep_flujo:"Flujo de fondos",rep_resultados:"Estado de resultados",rep_balance:"Balance",equipo:"Mi equipo",usuarios:"Usuarios",backup:"Respaldo de datos"};
   $("pageTitle").textContent=titles[page]||"";
   window.__usersCache = await DB.all("users");
   await refreshState(); updateTurnoState();
@@ -774,6 +775,7 @@ async function go(page){
   if(page==="ctacte")     return viewCtaCte(v);
   if(page==="activos")    return viewActivos(v);
   if(page==="aportes")    return viewAportes(v);
+  if(page==="concesiones") return viewConcesiones(v);
   if(page==="inversiones")return viewInversiones(v);
   if(page==="rep_general")   return viewRepGeneral(v);
   if(page==="rep_flujo")     return viewRepFlujo(v);
@@ -1290,7 +1292,10 @@ async function doConfirmSale(){
   const stockMov=Object.entries(need).map(([productId,cant])=>({productId,cant}));
   const sale={id:uid(),fecha:new Date().toISOString(),items,total,costoTotal,metodoPago:POS.method,pagos,cliente,creditoUser,usuario:APP.user.id,turnoId:APP.openShift.id,stockMov,anulada:false};
   await DB.put("sales",sale);
-  for(const mv of stockMov){ const p=await DB.get("products",mv.productId); if(p){ p.stock-=mv.cant; await DB.put("products",p); } }
+  for(const mv of stockMov){ const p=await DB.get("products",mv.productId); if(p){
+    if(p.concesion && (+p.costoConcesion||0)>0){ await DB.put("concesiones",{id:uid(),productId:p.id,desc:p.descripcion,proveedor:p.provConcesion||"",cant:mv.cant,costoUnit:+p.costoConcesion||0,monto:Math.round((+p.costoConcesion||0)*mv.cant*100)/100,fecha:sale.fecha,saleId:sale.id,pagada:false,metodoPago:null,paidFecha:null,caja:null,usuario:APP.user.id}); }
+    p.stock-=mv.cant; await DB.put("products",p);
+  } }
   await refreshState();
   printTicket(sale);
   if(APP.tickets && APP.tickets.length>1){
@@ -2071,6 +2076,7 @@ function openPurchaseWindow(suppliers){
     </div>
     <div class="note">El <b>IVA %</b> se le suma al costo de <b>cada producto</b> (si el costo es 100 y el IVA 21%, el costo final del producto pasa a 121). El envío NO afecta el costo, pero sí el total a pagar al proveedor.</div>
     <label>Forma de pago</label><select id="forma"><option value="contado">Contado</option><option value="credito">Crédito (a pagar)</option></select>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer;font-weight:600"><input type="checkbox" id="esConcesion" style="width:auto"> Es a <b>concesión</b> (le pago al proveedor recién cuando vendo cada unidad)</label>
     <div id="diasWrap" style="display:none"><label>Días para pagar</label><input id="dias" inputmode="numeric" value="30"></div>
     <div id="tot"></div>
   </div>
@@ -2166,7 +2172,7 @@ function openPurchaseWindow(suppliers){
       var pv=document.getElementById("prov");
       var data={proveedorId:pv.value, proveedorNombre:pv.options[pv.selectedIndex].text,
         lines:lines.map(function(l){return {id:l.id,cant:+l.cant||0,costoUnit:+l.costoUnit||0,precio:+l.precio||0};}),
-        fecha:document.getElementById("fingreso").value, iva:iva, envio:num(document.getElementById("envio").value), forma:forma.value, dias:num(document.getElementById("dias").value)};
+        fecha:document.getElementById("fingreso").value, iva:iva, envio:num(document.getElementById("envio").value), forma:forma.value, dias:num(document.getElementById("dias").value), concesion:document.getElementById("esConcesion").checked};
       if(window.opener && !window.opener.closed){ window.opener.postMessage({__purchase:true, data:data}, "*"); alert("Compra registrada. Se actualizaron stock, costos y precios."); window.close(); }
       else { alert("La ventana principal se cerró. Volvé a abrir la compra."); }
     };
@@ -2177,6 +2183,7 @@ function openPurchaseWindow(suppliers){
 async function applyPurchase(d){
   if(!d || !d.lines || !d.lines.length) return;
   const iva=+d.iva||0, envio=+d.envio||0, fac=1+iva/100;
+  const concesion=!!d.concesion, provNom=(d.proveedorNombre||"");
   for(const ln of d.lines){
     const p=await DB.get("products",ln.id); if(!p) continue;
     const ce=(+ln.costoUnit||0)*fac;
@@ -2185,6 +2192,7 @@ async function applyPurchase(d){
     p.costoProm = ns>0 ? Math.round((((p.stock*p.costoProm)+((+ln.cant||0)*ce))/ns)*100)/100 : Math.round(ce*100)/100;
     p.stock=ns;
     if(ln.precio!=null && +ln.precio>0 && +ln.precio!==p.precio) p.precio=+ln.precio;
+    if(concesion){ p.concesion=true; p.costoConcesion=Math.round(ce*100)/100; p.provConcesion=provNom; }
     await DB.put("products",p);
     if(Math.abs(costoAnt-p.costoProm)>0.001) await DB.put("priceHistory",{id:uid(),productId:p.id,fecha:new Date().toISOString(),campo:"costo",anterior:costoAnt,nuevo:p.costoProm,usuario:APP.user.id,nota:"compra"});
   }
@@ -2195,11 +2203,11 @@ async function applyPurchase(d){
   const venc=(d.forma==="credito"&&dias>0)?new Date(Date.now()+dias*86400000).toISOString():null;
   await DB.put("purchases",{id:uid(),fecha:(d.fecha?d.fecha+"T12:00:00.000Z":new Date().toISOString()),fechaRegistro:new Date().toISOString(),proveedorId:d.proveedorId||null,proveedorNombre:prov?prov.nombre:(d.proveedorNombre||""),
     items:d.lines.map(l=>({productId:l.id,cant:+l.cant||0,costoUnit:+l.costoUnit||0})),
-    iva,envio,subtotal,total,formaPago:d.forma,diasCredito:dias,vencimiento:venc,
-    caja:(d.forma==="contado"?"fisica":null),pagada:(d.forma==="contado"),paidTurnoId:null,paidCaja:null,paidFecha:null,
+    iva,envio,subtotal,total,formaPago:(concesion?"concesion":d.forma),concesion,diasCredito:dias,vencimiento:venc,
+    caja:(concesion?null:(d.forma==="contado"?"fisica":null)),pagada:(concesion?false:(d.forma==="contado")),paidTurnoId:null,paidCaja:null,paidFecha:null,
     turnoId:(APP.openShift?APP.openShift.id:null),usuario:APP.user.id});
   await refreshState();
-  toast(d.forma==="credito"?"Compra a crédito guardada (Cuentas por pagar)":"Compra registrada · costos y precios actualizados","ok");
+  toast(concesion?"Compra a concesión guardada · el stock ya está disponible":(d.forma==="credito"?"Compra a crédito guardada (Cuentas por pagar)":"Compra registrada · costos y precios actualizados"),"ok");
   if(APP.page==="compras") go("compras");
 }
 async function editPurchaseModal(p){
@@ -3299,6 +3307,54 @@ function aporteModal(a){
     }}
   ]);
 }
+async function viewConcesiones(v){
+  const prods=(await DB.all("products")).filter(p=>p.concesion===true).sort((a,b)=>a.descripcion.localeCompare(b.descripcion));
+  const deudas=(await DB.all("concesiones")).sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
+  const pend=deudas.filter(d=>!d.pagada), pagadas=deudas.filter(d=>d.pagada);
+  const totalDeuda=pend.reduce((a,d)=>a+(+d.monto||0),0);
+  const valorStock=prods.reduce((a,p)=>a+(+p.costoConcesion||0)*(p.stock||0),0);
+  v.innerHTML=`
+    <div class="help">Productos que tenés <b>a concesión</b>: le pagás al proveedor recién cuando vendés cada unidad. Abajo aparecen las deudas que se generan al vender; marcalas como pagadas indicando el método.</div>
+    <div class="grid kpis">
+      <div class="kpi bad"><div class="lab">Deuda pendiente</div><div class="val" style="color:var(--bad)">${money(totalDeuda)}</div></div>
+      <div class="kpi"><div class="lab">Productos en concesión</div><div class="val">${prods.length}</div></div>
+      <div class="kpi"><div class="lab">Valor del stock en concesión</div><div class="val">${money(valorStock)}</div></div>
+    </div>
+    <div class="card" style="margin-top:14px"><div class="card-h"><h3>Productos en concesión</h3></div><div class="card-b flush"><div class="tbl-wrap"><table>
+      <thead><tr><th>Producto</th><th>Proveedor</th><th class="num">En stock</th><th class="num">A pagar por unidad</th><th class="num">Precio venta</th></tr></thead><tbody>
+      ${prods.map(p=>`<tr><td><b>${esc(p.descripcion)}</b></td><td>${esc(p.provConcesion||"—")}</td><td class="num">${p.stock}</td><td class="num">${money(p.costoConcesion)}</td><td class="num">${money(p.precio)}</td></tr>`).join("")||`<tr><td colspan="5"><div class="empty">No tenés productos en concesión. Cargá una compra tildando "Es a concesión".</div></td></tr>`}
+    </tbody></table></div></div></div>
+    <div class="card" style="margin-top:16px"><div class="card-h"><h3>Deudas a saldar</h3></div><div class="card-b flush"><div class="tbl-wrap"><table>
+      <thead><tr><th></th><th>Fecha venta</th><th>Producto</th><th>Proveedor</th><th class="num">Cant.</th><th class="num">A pagar</th></tr></thead><tbody>
+      ${pend.map(d=>`<tr><td class="selcol"><span class="selcirc" data-pay="${d.id}" title="Marcar como pagada"></span></td><td>${fmtDate(d.fecha)}</td><td>${esc(d.desc)}</td><td>${esc(d.proveedor||"—")}</td><td class="num">${d.cant}</td><td class="num" style="font-weight:700">${money(d.monto)}</td></tr>`).join("")||`<tr><td colspan="6"><div class="empty">No hay deudas pendientes.</div></td></tr>`}
+    </tbody></table></div></div></div>
+    ${pagadas.length?`<div class="card" style="margin-top:16px"><div class="card-h"><h3>Pagadas</h3></div><div class="card-b flush"><div class="tbl-wrap"><table>
+      <thead><tr><th>Fecha pago</th><th>Producto</th><th class="num">Monto</th><th>Método</th></tr></thead><tbody>
+      ${pagadas.map(d=>`<tr><td>${d.paidFecha?fmtDate(d.paidFecha):"—"}</td><td>${esc(d.desc)}</td><td class="num">${money(d.monto)}</td><td><span class="badge ok">${PAY_LABEL[d.metodoPago]||d.metodoPago||"—"}</span></td></tr>`).join("")}
+    </tbody></table></div></div></div>`:""}`;
+  v.querySelectorAll("[data-pay]").forEach(n=>n.onclick=()=>pagarConcesion(deudas.find(d=>d.id===n.dataset.pay)));
+}
+function pagarConcesion(deuda){
+  if(!deuda) return;
+  let met="efectivo";
+  const METS=["efectivo","tarjeta","transferencia"];
+  modal("Pagar concesión",`
+    <div class="mini">Le pagás a <b>${esc(deuda.proveedor||"—")}</b> por <b>${esc(deuda.desc)}</b> (${deuda.cant} unidad${deuda.cant>1?"es":""}).</div>
+    <div style="font-size:26px;font-weight:800;color:var(--orange);text-align:center;margin:12px 0">${money(deuda.monto)}</div>
+    <label>¿Con qué método pagaste?</label>
+    <div class="pay-methods" id="cpMet">${METS.map(k=>`<div class="pm ${k==="efectivo"?"sel":""}" data-cm="${k}"><div class="pmi">${PAY_ICON[k]||""}</div>${PAY_LABEL[k]}</div>`).join("")}</div>
+    <div class="mini" id="cpNote" style="margin-top:8px">Sale de la caja física (egreso de efectivo).</div>
+  `,[{label:"Confirmar pago",cls:"btn",fn:async close=>{
+    if(met==="efectivo"){
+      if(!APP.openShift){ toast("Abrí un turno para registrar la salida de efectivo","bad"); return; }
+      if(!soyDuenoTurno()){ toast("La caja la maneja quien tiene el turno abierto","bad"); return; }
+      await DB.put("movimientos",{id:uid(),tipo:"salida",monto:deuda.monto,motivo:"Pago concesión · "+deuda.desc+(deuda.proveedor?" ("+deuda.proveedor+")":""),fecha:new Date().toISOString(),usuario:APP.user.id,turnoId:APP.openShift.id});
+    }
+    deuda.pagada=true; deuda.metodoPago=met; deuda.paidFecha=new Date().toISOString(); deuda.caja=(met==="efectivo"?"fisica":null);
+    await DB.put("concesiones",deuda); await refreshState(); close(); toast("Deuda saldada · "+PAY_LABEL[met],"ok"); go("concesiones");
+  }}]);
+  setTimeout(()=>{ document.querySelectorAll("#cpMet [data-cm]").forEach(n=>n.onclick=()=>{ met=n.dataset.cm; document.querySelectorAll("#cpMet .pm").forEach(x=>x.classList.remove("sel")); n.classList.add("sel"); const el=$("cpNote"); if(el) el.textContent=met==="efectivo"?"Sale de la caja física (egreso de efectivo).":"No afecta la caja física (pago electrónico)."; }); },40);
+}
 async function viewTrazabilidad(v){
   if(APP.user.rol!=="propietario"){ v.innerHTML=`<div class="help">Solo los <b>propietarios</b> pueden acceder a Trazabilidad.</div>`; return; }
   v.innerHTML=`
@@ -3549,7 +3605,7 @@ async function viewRepFlujo(v){
     const ventasEfe=z(), ventasEle=z(), entradas=z(), comprasPag=z(), gastosFijos=z(), gastosVar=z(), pagosProv=z(), salidas=z(), invers=z(), aportes=z(), activCapex=z();
     sales.forEach(s=>{ const m=mi(s.fecha); if(m<0)return; (s.pagos&&s.pagos.length?s.pagos:[{metodo:s.metodoPago,monto:s.total}]).forEach(p=>{ if(p.metodo==="efectivo") ventasEfe[m]+=p.monto; else ventasEle[m]+=p.monto; }); });
     movs.forEach(x=>{ const m=mi(x.fecha); if(m<0)return; if(x.tipo==="entrada") entradas[m]+=x.monto; else salidas[m]+=x.monto; });
-    purchases.forEach(c=>{ if(c.formaPago==="contado"){ const m=mi(c.fecha); if(m>=0) comprasPag[m]+=(c.total||0); } else if(c.pagada){ const m=mi(c.paidFecha||c.fecha); if(m>=0) pagosProv[m]+=(c.total||0); } });
+    purchases.forEach(c=>{ if(c.concesion) return; if(c.formaPago==="contado"){ const m=mi(c.fecha); if(m>=0) comprasPag[m]+=(c.total||0); } else if(c.pagada){ const m=mi(c.paidFecha||c.fecha); if(m>=0) pagosProv[m]+=(c.total||0); } });
     expenses.forEach(e=>{ const m=mi(e.fecha); if(m<0)return; if(e.tipo==="fijo") gastosFijos[m]+=e.monto; else gastosVar[m]+=e.monto; });
     inversiones.forEach(x=>{ const m=mi(x.fecha); if(m>=0) invers[m]+=x.monto; });
     aportesArr.forEach(x=>{ const m=mi(x.fecha); if(m>=0) aportes[m]+=(x.monto||0); });
@@ -3626,7 +3682,9 @@ async function viewRepBalance(v){
   const activFijos=activosArr.filter(a=>a.propiedad!=="Comodato").reduce((s,a)=>s+(+a.costo||0)*(+a.cantidad||1),0);
   const invValor=products.reduce((a,p)=>a+(p.stock*(p.costoProm||0)),0);
   const invTotal=inversiones.reduce((a,x)=>a+(x.monto||0),0);
-  const cxp=purchases.filter(c=>c.formaPago==="credito"&&!c.pagada).reduce((a,c)=>a+(c.total||0),0);
+  const conces=await DB.all("concesiones");
+  const deudaConces=conces.filter(d=>!d.pagada).reduce((a,d)=>a+(+d.monto||0),0);
+  const cxp=purchases.filter(c=>c.formaPago==="credito"&&!c.pagada).reduce((a,c)=>a+(c.total||0),0)+deudaConces;
   let efe=0;
   sales.forEach(s=>{ (s.pagos&&s.pagos.length?s.pagos:[{metodo:s.metodoPago,monto:s.total}]).forEach(p=>{ if(p.metodo==="efectivo") efe+=p.monto; }); });
   movs.forEach(x=>{ if(x.tipo==="entrada") efe+=(x.monto||0); else efe-=(x.monto||0); });
