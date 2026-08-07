@@ -373,7 +373,7 @@ break;case"<bookViews":;case"<bookViews>":;case"</bookViews>":break;case"<workbo
    ========================================================= */
 
 /* ---------- Capa de datos en la NUBE (Firestore + tiempo real) ---------- */
-const STORES = ["products","sales","shifts","cashCloses","expenses","users","priceHistory","purchases","suppliers","combos","movimientos","ajustes","inversiones","perdidas","activos","aportes","concesiones","meta"];
+const STORES = ["products","sales","shifts","cashCloses","expenses","users","priceHistory","purchases","suppliers","combos","movimientos","ajustes","inversiones","perdidas","activos","aportes","concesiones","papelera","meta"];
 const MIRROR = {}; STORES.forEach(s=>MIRROR[s]=[]);
 let _db=null, _auth=null, _ready=false;
 const _firstSnap={};
@@ -458,7 +458,7 @@ const APP = {
   user:null, page:"dashboard",
   products:[], combos:[], cart:[], openShift:null,
 };
-const ROLE_LABEL = {propietario:"Propietario",gerente:"Gerente",supervisor:"Supervisor",cajero:"Cajero"};
+const ROLE_LABEL = {propietario:"Propietario",gerente:"Gerente",supervisor:"Supervisor",cajero:"Operaciones"};
 const PAY_LABEL = {efectivo:"Efectivo",tarjeta:"Tarjeta",transferencia:"Transferencia",debito:"Débito",credito:"Crédito",mixto:"Mixto",fiado:"Fiado"};
 const PAY_OPTIONS = ["efectivo","tarjeta","transferencia","credito","mixto"];
 const NAV = [
@@ -488,6 +488,7 @@ const NAV = [
   {id:"equipo",    label:"Mi equipo", ic:"🫂", roles:["propietario","gerente"]},
   {id:"usuarios",  label:"Usuarios", ic:"👥", roles:["propietario","gerente"]},
   {id:"backup",    label:"Respaldo", ic:"💾", roles:["propietario","gerente","supervisor"]},
+  {id:"papelera",  label:"Papelera", ic:"🗑️", roles:["propietario"]},
 ];
 function isOwner(){ return APP.user && (APP.user.rol==="propietario"||APP.user.rol==="gerente"); }
 function soyDuenoTurno(){ return !!(APP.openShift && APP.user && APP.openShift.usuario===APP.user.id); }
@@ -523,6 +524,25 @@ async function _nukeCollection(name){
   } else {
     await DB.clear(name);
   }
+}
+function trashLabel(store,r){
+  const m=v=>money(v||0);
+  if(store==="expenses") return "Gasto \u00b7 "+(r.descripcion||"")+" \u00b7 "+m(r.monto);
+  if(store==="purchases") return "Compra \u00b7 "+(r.proveedorNombre||r.proveedor||"")+" \u00b7 "+m(r.total);
+  if(store==="aportes") return "Aporte \u00b7 "+(r.descripcion||"")+" \u00b7 "+m(r.monto);
+  if(store==="activos") return "Activo \u00b7 "+(r.concepto||"")+" \u00b7 "+m(r.costo);
+  if(store==="concesiones") return "Concesi\u00f3n \u00b7 "+(r.desc||"")+" \u00b7 "+m(r.monto);
+  if(store==="products") return "Producto \u00b7 "+(r.descripcion||"");
+  if(store==="combos") return "Combo \u00b7 "+(r.nombre||"");
+  if(store==="suppliers") return "Proveedor \u00b7 "+(r.nombre||"");
+  if(store==="inversiones") return "Inversi\u00f3n \u00b7 "+m(r.monto);
+  if(store==="perdidas") return "P\u00e9rdida \u00b7 "+(r.motivo||"")+" \u00b7 "+m(r.valor);
+  if(store==="sales") return "Venta \u00b7 "+m(r.total);
+  return store+" \u00b7 "+(r.id||"");
+}
+async function trashDel(store,id){
+  try{ const rec=await DB.get(store,id); if(rec){ await DB.put("papelera",{id:uid(),store,data:rec,label:trashLabel(store,rec),fecha:new Date().toISOString(),usuario:(APP.user?APP.user.id:null)}); } }catch(e){}
+  await DB.del(store,id);
 }
 async function seedIfEmpty(){
   const DEFAULT_USERS=[
@@ -752,7 +772,7 @@ async function go(page){
   const ni=NAV.find(n=>n.id===page);
   if(ni && APP.user && !ni.roles.includes(APP.user.rol)) page=landingPage();
   APP.page=page; setActive();
-  const titles={dashboard:"Panel",pos:"Punto de venta",inventario:"Catálogo",combos:"Promociones y Combos",compras:"Compras",ajustes:"Ajuste de inventario",auditoria:"Auditoría de Stock",perdidas:"Pérdidas",trazabilidad:"Trazabilidad",cuentas:"Cuentas por pagar",proveedores:"Proveedores",ventas:"Historial de ventas",turnos:"Turnos",caja:"Cierre de caja",gastos:"Gastos",ctacte:"Cuenta corriente del equipo",inversiones:"Inversiones",activos:"Activos fijos",aportes:"Aporte de capital",concesiones:"Concesiones",rep_general:"Reportes generales",rep_flujo:"Flujo de fondos",rep_resultados:"Estado de resultados",rep_balance:"Balance",equipo:"Mi equipo",usuarios:"Usuarios",backup:"Respaldo de datos"};
+  const titles={dashboard:"Panel",pos:"Punto de venta",inventario:"Catálogo",combos:"Promociones y Combos",compras:"Compras",ajustes:"Ajuste de inventario",auditoria:"Auditoría de Stock",perdidas:"Pérdidas",trazabilidad:"Trazabilidad",cuentas:"Cuentas por pagar",proveedores:"Proveedores",ventas:"Historial de ventas",turnos:"Turnos",caja:"Cierre de caja",gastos:"Gastos",ctacte:"Cuenta corriente del equipo",inversiones:"Inversiones",activos:"Activos fijos",aportes:"Aporte de capital",concesiones:"Concesiones",papelera:"Papelera de reciclaje",rep_general:"Reportes generales",rep_flujo:"Flujo de fondos",rep_resultados:"Estado de resultados",rep_balance:"Balance",equipo:"Mi equipo",usuarios:"Usuarios",backup:"Respaldo de datos"};
   $("pageTitle").textContent=titles[page]||"";
   window.__usersCache = await DB.all("users");
   await refreshState(); updateTurnoState();
@@ -776,6 +796,7 @@ async function go(page){
   if(page==="activos")    return viewActivos(v);
   if(page==="aportes")    return viewAportes(v);
   if(page==="concesiones") return viewConcesiones(v);
+  if(page==="papelera")   return viewPapelera(v);
   if(page==="inversiones")return viewInversiones(v);
   if(page==="rep_general")   return viewRepGeneral(v);
   if(page==="rep_flujo")     return viewRepFlujo(v);
@@ -1429,7 +1450,7 @@ async function viewInventario(v){
 ${nombres}${ids.length>5?"\n• …y "+(ids.length-5)+" más":""}
 
 Esta acción NO se puede deshacer.`)) return;
-    for(const id of ids) await DB.del("products",id);
+    for(const id of ids) await trashDel("products",id);
     SEL.clear(); await refreshState();
     toast(`${ids.length} producto${ids.length>1?"s":""} eliminado${ids.length>1?"s":""}`,"ok");
     go("inventario");
@@ -1500,7 +1521,7 @@ function editProduct(p){
     </div>
     <div class="mini" id="mgPrev"></div>
   `,[
-    isNew?null:{label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar producto?")){await DB.del("products",p.id); close(); toast("Producto eliminado"); go("inventario");}}},
+    isNew?null:{label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar producto?")){await trashDel("products",p.id); close(); toast("Producto eliminado"); go("inventario");}}},
     {label:"Guardar",cls:"btn",fn:async close=>{
       const old={costoProm:p.costoProm,precio:p.precio};
       const np={
@@ -1760,7 +1781,7 @@ function comboFijoModal(c){
     </div>
     <div class="card" style="margin-top:4px"><div class="card-b" id="cf_resume"></div></div>
   `,[
-    isNew?null:{label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar combo?")){await DB.del("combos",c.id);close();toast("Combo eliminado");go("combos");}}},
+    isNew?null:{label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar combo?")){await trashDel("combos",c.id);close();toast("Combo eliminado");go("combos");}}},
     {label:"Guardar combo",cls:"btn",fn:async close=>{
       const nombre=$("cf_nombre").value.trim(); const precio=parseNum($("cf_precio").value);
       if(!nombre){toast("Ponele un nombre","bad");return;}
@@ -1813,7 +1834,7 @@ function comboNxMModal(c){
     <div class="field"><label>Nombre (se sugiere solo)</label><input id="nm_nombre" value="${esc(c.nombre)}"></div>
     <div class="card"><div class="card-b" id="nm_resume"></div></div>
   `,[
-    isNew?null:{label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar promo?")){await DB.del("combos",c.id);close();toast("Promo eliminada");go("combos");}}},
+    isNew?null:{label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar promo?")){await trashDel("combos",c.id);close();toast("Promo eliminada");go("combos");}}},
     {label:"Guardar promo",cls:"btn",fn:async close=>{
       const n=parseInt($("nm_n").value)||0, m=parseInt($("nm_m").value)||0;
       if(!sel){toast("Elegí el producto","bad");return;}
@@ -1965,7 +1986,7 @@ async function viewCompras(v){
   const toggleAll=()=>{ const all=visibles.length>0&&visibles.every(c=>SEL.has(c.id)); if(all)visibles.forEach(c=>SEL.delete(c.id));else visibles.forEach(c=>SEL.add(c.id)); draw(); };
   $("cSelAll").onclick=toggleAll; $("cSelAllLbl").onclick=toggleAll;
   $("cSelClear").onclick=()=>{ SEL.clear(); draw(); };
-  $("cSelDel").onclick=async()=>{ const ids=[...SEL]; if(!ids.length)return; if(!confirm(`¿Seguro que querés borrar ${ids.length} compra${ids.length>1?"s":""}? Esta acción NO se puede deshacer.`))return; for(const id of ids) await DB.del("purchases",id); SEL.clear(); await refreshState(); toast(`${ids.length} compra${ids.length>1?"s":""} borrada${ids.length>1?"s":""}`,"ok"); go("compras"); };
+  $("cSelDel").onclick=async()=>{ const ids=[...SEL]; if(!ids.length)return; if(!confirm(`¿Seguro que querés borrar ${ids.length} compra${ids.length>1?"s":""}? Esta acción NO se puede deshacer.`))return; for(const id of ids) await trashDel("purchases",id); SEL.clear(); await refreshState(); toast(`${ids.length} compra${ids.length>1?"s":""} borrada${ids.length>1?"s":""}`,"ok"); go("compras"); };
   if(!window.__purchaseListener){ window.__purchaseListener=true; window.addEventListener("message", async e=>{ if(e && e.data && e.data.__purchase){ await applyPurchase(e.data.data); } }); }
   $("fProv").onchange=()=>{SEL.clear();draw();}; $("fMes").onchange=()=>{SEL.clear();draw();}; draw();
   $("newPurchase").onclick=()=>openPurchaseWindow(suppliers);
@@ -1996,7 +2017,7 @@ function editPurchaseSimple(c, suppliers){
     </div>
     <div class="mini">Fecha de registro: <b>${c.fechaRegistro?fmtDateTime(c.fechaRegistro):"—"}</b> (automática, no editable). Editás la fecha de ingreso y los datos generales.</div>
   `,[
-    {label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar esta compra del historial?")){ await DB.del("purchases",c.id); await refreshState(); close(); toast("Compra eliminada","ok"); go("compras"); } }},
+    {label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar esta compra del historial?")){ await trashDel("purchases",c.id); await refreshState(); close(); toast("Compra eliminada","ok"); go("compras"); } }},
     {label:"Guardar",cls:"btn",fn:async close=>{
       const monto=parseNum($("ep_monto").value);
       const forma=$("ep_forma").value;
@@ -2122,14 +2143,16 @@ function openPurchaseWindow(suppliers){
           +'<td><b>'+esc(l.desc)+'</b><div class="meta">stock '+l.stock+' \u00b7 costo actual '+money(l.costoActual)+'</div></td>'
           +'<td class="num"><div class="stp"><input data-c="'+i+'" value="'+l.cant+'" '+dis+'><div class="arr"><button data-up="'+i+'" '+dis+'>&#9650;</button><button data-dn="'+i+'" '+dis+'>&#9660;</button></div></div></td>'
           +'<td class="num"><input class="w" data-u="'+i+'" value="'+l.costoUnit+'" '+dis+'></td>'
-          +'<td class="num" style="font-weight:800">'+money((+l.costoUnit||0)*(+l.cant||0)*ivaFac())+'</td>'
-          +'<td class="num" style="font-weight:700">'+money(r.cp)+'</td>'
+          +'<td class="num" style="font-weight:800" data-imp="'+i+'">'+money((+l.costoUnit||0)*(+l.cant||0)*ivaFac())+'</td>'
+          +'<td class="num" style="font-weight:700" data-cp="'+i+'">'+money(r.cp)+'</td>'
           +'<td class="num"><span class="pv" data-pv="'+i+'" title="Doble clic para editar">'+money(l.precio)+'</span></td>'
-          +'<td class="num"><span class="mk '+(r.mk<0?"bad":r.mk<50?"warn":"ok")+'">'+r.mk.toFixed(1)+'%</span></td>'
+          +'<td class="num"><span class="mk '+(r.mk<0?"bad":r.mk<50?"warn":"ok")+'" data-mk="'+i+'">'+r.mk.toFixed(1)+'%</span></td>'
           +'<td class="num">'+(l.confirmed?"":'<button class="rm" data-x="'+i+'">&times;</button>')+'</td></tr>';
       }).join("");
-      Array.prototype.forEach.call(tb.querySelectorAll("[data-c]"),function(inp){inp.oninput=function(){inp.value=inp.value.replace(/[^0-9.,]/g,"");lines[+inp.getAttribute("data-c")].cant=num(inp.value);draw();};});
-      Array.prototype.forEach.call(tb.querySelectorAll("[data-u]"),function(inp){inp.oninput=function(){inp.value=inp.value.replace(/[^0-9.,]/g,"");lines[+inp.getAttribute("data-u")].costoUnit=num(inp.value);draw();};});
+      function patchRow(i){ var l=lines[i]; if(!l)return; var rr=calcRow(l); var imp=tb.querySelector('[data-imp="'+i+'"]'); if(imp)imp.textContent=money((+l.costoUnit||0)*(+l.cant||0)*ivaFac()); var cp=tb.querySelector('[data-cp="'+i+'"]'); if(cp)cp.textContent=money(rr.cp); var mk=tb.querySelector('[data-mk="'+i+'"]'); if(mk){mk.textContent=rr.mk.toFixed(1)+'%'; mk.className='mk '+(rr.mk<0?"bad":rr.mk<50?"warn":"ok");} updTotal(); updConfirm(); }
+      function numInput(inp,attr,set){ inp.oninput=function(){ var raw=inp.value,p=inp.selectionStart; var nv=raw.replace(/[^0-9.,]/g,""); if(nv!==raw){ inp.value=nv; var np=Math.max(0,p-(raw.length-nv.length)); try{inp.setSelectionRange(np,np);}catch(e){} } set(+inp.getAttribute(attr),num(inp.value)); patchRow(+inp.getAttribute(attr)); }; inp.onkeydown=function(e){ if(e.key==="Enter"){ e.preventDefault(); inp.blur(); } }; }
+      Array.prototype.forEach.call(tb.querySelectorAll("[data-c]"),function(inp){ numInput(inp,"data-c",function(i,val){lines[i].cant=val;}); });
+      Array.prototype.forEach.call(tb.querySelectorAll("[data-u]"),function(inp){ numInput(inp,"data-u",function(i,val){lines[i].costoUnit=val;}); });
       Array.prototype.forEach.call(tb.querySelectorAll("[data-up]"),function(b){b.onclick=function(){var i=+b.getAttribute("data-up");lines[i].cant=(+lines[i].cant||0)+1;draw();};});
       Array.prototype.forEach.call(tb.querySelectorAll("[data-dn]"),function(b){b.onclick=function(){var i=+b.getAttribute("data-dn");lines[i].cant=Math.max(1,(+lines[i].cant||0)-1);draw();};});
       Array.prototype.forEach.call(tb.querySelectorAll("[data-x]"),function(b){b.onclick=function(){lines.splice(+b.getAttribute("data-x"),1);draw();};});
@@ -2316,7 +2339,7 @@ function supplierModal(s){
     <div class="field"><label>Dirección</label><input id="s_dir" value="${esc(s.direccion||"")}"></div>
     <div class="field"><label>Notas</label><textarea id="s_notas" rows="2">${esc(s.notas||"")}</textarea></div>
   `,[
-    isNew?null:{label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar proveedor?")){await DB.del("suppliers",s.id); close(); toast("Proveedor eliminado"); go("proveedores");}}},
+    isNew?null:{label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar proveedor?")){await trashDel("suppliers",s.id); close(); toast("Proveedor eliminado"); go("proveedores");}}},
     {label:"Guardar",cls:"btn",fn:async close=>{
       const nombre=$("s_nombre").value.trim();
       if(!nombre){toast("Falta el nombre del proveedor","bad");return;}
@@ -2550,7 +2573,7 @@ async function viewGastos(v){
     $("gSelAll").classList.toggle("on", L.length>0 && L.every(e=>GSEL.has(e.id)));
     $("gastBody").querySelectorAll("[data-sel]").forEach(s=>s.onclick=()=>{const id=s.dataset.sel; if(GSEL.has(id))GSEL.delete(id);else GSEL.add(id); gdraw();});
     $("gastBody").querySelectorAll("[data-edx]").forEach(b=>b.onclick=()=>editExpenseModal(exp.find(x=>x.id===b.dataset.edx)));
-    $("gastBody").querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{if(confirm("¿Eliminar gasto?")){await DB.del("expenses",b.dataset.del);await refreshState();go("gastos");}});
+    $("gastBody").querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{if(confirm("¿Eliminar gasto?")){await trashDel("expenses",b.dataset.del);await refreshState();go("gastos");}});
   }
   const gToggle=()=>{const all=gvis.length>0&&gvis.every(e=>GSEL.has(e.id)); if(all)gvis.forEach(e=>GSEL.delete(e.id));else gvis.forEach(e=>GSEL.add(e.id)); gdraw();};
   $("impGastos").onclick=importGastos;
@@ -2576,7 +2599,7 @@ async function viewGastos(v){
   $("gCat").onchange=gdraw; $("gTipo").onchange=gdraw; $("gMes").onchange=gdraw;
   $("gSelAll").onclick=gToggle; $("gSelAllLbl").onclick=gToggle;
   $("gSelClear").onclick=()=>{GSEL.clear();gdraw();};
-  $("gSelDel").onclick=async()=>{const ids=[...GSEL]; if(!ids.length)return; if(!confirm(`¿Seguro que querés borrar ${ids.length} gasto${ids.length>1?"s":""}? Esta acción NO se puede deshacer.`))return; for(const id of ids) await DB.del("expenses",id); GSEL.clear(); await refreshState(); toast(`${ids.length} gasto${ids.length>1?"s":""} borrado${ids.length>1?"s":""}`,"ok"); go("gastos");};
+  $("gSelDel").onclick=async()=>{const ids=[...GSEL]; if(!ids.length)return; if(!confirm(`¿Seguro que querés borrar ${ids.length} gasto${ids.length>1?"s":""}? Esta acción NO se puede deshacer.`))return; for(const id of ids) await trashDel("expenses",id); GSEL.clear(); await refreshState(); toast(`${ids.length} gasto${ids.length>1?"s":""} borrado${ids.length>1?"s":""}`,"ok"); go("gastos");};
   gdraw();
 }
 
@@ -2597,7 +2620,7 @@ function editExpenseModal(e){
     <div class="field"><label>Descripción</label><input id="eg_desc" value="${esc(e.descripcion||"")}"></div>
     <div class="mini">Fecha de registro: <b>${e.fechaRegistro?fmtDateTime(e.fechaRegistro):"—"}</b> (automática, no editable).</div>
   `,[
-    {label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar este gasto?")){ await DB.del("expenses",e.id); await refreshState(); close(); toast("Gasto eliminado","ok"); go("gastos"); } }},
+    {label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar este gasto?")){ await trashDel("expenses",e.id); await refreshState(); close(); toast("Gasto eliminado","ok"); go("gastos"); } }},
     {label:"Guardar",cls:"btn",fn:async close=>{
       const monto=parseNum($("eg_monto").value); if(!(monto>0)){ toast("Poné un monto válido","bad"); return; }
       e.fecha=$("eg_f").value||e.fecha; e.categoria=$("eg_cat").value; e.tipo=$("eg_tipo").value; e.monto=monto; e.descripcion=$("eg_desc").value.trim();
@@ -2706,7 +2729,7 @@ async function viewUsuarios(v){
   <div class="card"><div class="card-b flush"><div class="tbl-wrap"><table><thead><tr><th>Nombre</th><th>Rol</th><th>PIN</th><th></th></tr></thead><tbody>
   ${users.map(u=>`<tr><td>${esc(u.nombre)}</td><td><span class="roletag ${u.rol}">${ROLE_LABEL[u.rol]}</span></td><td class="mini">••••</td><td class="right"><button class="btn sm gray" data-eu="${u.id}">Editar</button></td></tr>`).join("")}
   </tbody></table></div></div></div>
-  <div class="help" style="margin-top:14px">Los roles definen qué módulos ve cada uno. <b>Gerente</b>: todo. <b>Supervisor</b>: todo menos gestión de usuarios. <b>Cajero</b>: panel, ventas, turnos y caja.</div>`;
+  <div class="help" style="margin-top:14px">Los roles definen qué módulos ve cada uno. <b>Gerente</b>: todo. <b>Supervisor</b>: todo menos gestión de usuarios. <b>Operaciones</b>: panel, ventas, turnos y caja.</div>`;
   $("newUser").onclick=()=>userModal(null);
   v.querySelectorAll("[data-eu]").forEach(b=>b.onclick=()=>userModal(users.find(u=>u.id===b.dataset.eu)));
 }
@@ -3037,7 +3060,7 @@ async function viewInversiones(v){
     const toggleOtro=()=>{ $("inv_otroWrap").style.display=$("inv_cat").value==="otro"?"block":"none"; };
     toggleOtro(); $("inv_cat").onchange=toggleOtro;
   };
-  v.querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{ if(confirm("¿Eliminar este movimiento?")){ await DB.del("inversiones",b.dataset.del); go("inversiones"); } });
+  v.querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{ if(confirm("¿Eliminar este movimiento?")){ await trashDel("inversiones",b.dataset.del); go("inversiones"); } });
 }
 async function viewPerdidas(v){
   const per=(await DB.all("perdidas")).sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
@@ -3057,7 +3080,7 @@ async function viewPerdidas(v){
       ${per.map(x=>`<tr><td>${fmtDateTime(x.fecha)}</td><td>${esc(x.productoNombre)}</td><td class="num" style="color:var(--bad);font-weight:600">${x.cantidad}</td><td><span class="badge ${x.motivo==="Vencimiento"?'warn':x.motivo==="Merma de inventario"?'cel':'gray'}">${esc(x.motivo||"—")}</span></td><td class="num">${money((x.cantidad||0)*(x.costoUnit||0))}</td><td class="mini">${esc(userName(x.usuario))}</td><td class="right"><button class="rm" data-del="${x.id}">×</button></td></tr>`).join("")||`<tr><td colspan="7"><div class="empty">Sin pérdidas registradas.</div></td></tr>`}
     </tbody></table></div></div></div>`;
   $("newPerd").onclick=perdidaModal;
-  v.querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{ if(confirm("¿Eliminar este registro de pérdida? (no repone el stock)")){ await DB.del("perdidas",b.dataset.del); go("perdidas"); } });
+  v.querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{ if(confirm("¿Eliminar este registro de pérdida? (no repone el stock)")){ await trashDel("perdidas",b.dataset.del); go("perdidas"); } });
 }
 function perdidaModal(){
   let sel=null;
@@ -3214,7 +3237,7 @@ async function viewActivos(v){
     </table></div></div></div>`;
   $("addAct").onclick=()=>activoModal(null);
   v.querySelectorAll("[data-ed]").forEach(n=>n.onclick=()=>activoModal(list.find(a=>a.id===n.dataset.ed)));
-  v.querySelectorAll("[data-del]").forEach(n=>n.onclick=async()=>{ const a=list.find(x=>x.id===n.dataset.del); if(confirm(`¿Borrar el activo "${a.concepto}"?`)){ await DB.del("activos",a.id); await refreshState(); toast("Activo borrado","ok"); go("activos"); } });
+  v.querySelectorAll("[data-del]").forEach(n=>n.onclick=async()=>{ const a=list.find(x=>x.id===n.dataset.del); if(confirm(`¿Borrar el activo "${a.concepto}"?`)){ await trashDel("activos",a.id); await refreshState(); toast("Activo borrado","ok"); go("activos"); } });
 }
 function activoModal(a){
   const e=a||{};
@@ -3280,7 +3303,7 @@ async function viewAportes(v){
   const toggle=()=>{const all=list.length>0&&list.every(a=>SEL.has(a.id)); if(all)SEL.clear();else list.forEach(a=>SEL.add(a.id)); draw();};
   $("apSelAll").onclick=toggle; $("apSelAllLbl").onclick=toggle;
   $("apSelClear").onclick=()=>{SEL.clear();draw();};
-  $("apSelDel").onclick=async()=>{const ids=[...SEL]; if(!ids.length)return; if(!confirm(`¿Seguro que querés borrar ${ids.length} aporte${ids.length>1?"s":""}? Esta acción NO se puede deshacer.`))return; for(const id of ids) await DB.del("aportes",id); SEL.clear(); await refreshState(); toast(`${ids.length} aporte${ids.length>1?"s":""} borrado${ids.length>1?"s":""}`,"ok"); go("aportes");};
+  $("apSelDel").onclick=async()=>{const ids=[...SEL]; if(!ids.length)return; if(!confirm(`¿Seguro que querés borrar ${ids.length} aporte${ids.length>1?"s":""}? Esta acción NO se puede deshacer.`))return; for(const id of ids) await trashDel("aportes",id); SEL.clear(); await refreshState(); toast(`${ids.length} aporte${ids.length>1?"s":""} borrado${ids.length>1?"s":""}`,"ok"); go("aportes");};
   $("addAp").onclick=()=>aporteModal(null);
   draw();
 }
@@ -3297,7 +3320,7 @@ function aporteModal(a){
       <div class="field"><label>Motivo</label><select id="ap_mot">${APORTE_MOTIVOS.map(m=>`<option ${m===e.motivo?"selected":""}>${m}</option>`).join("")}</select></div>
     </div>
   `,[
-    ...(a?[{label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar este aporte?")){ await DB.del("aportes",a.id); await refreshState(); close(); toast("Aporte eliminado","ok"); go("aportes"); } }}]:[]),
+    ...(a?[{label:"Eliminar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Eliminar este aporte?")){ await trashDel("aportes",a.id); await refreshState(); close(); toast("Aporte eliminado","ok"); go("aportes"); } }}]:[]),
     {label:a?"Guardar":"Registrar",cls:"btn",fn:async close=>{
       const monto=parseNum($("ap_m").value); if(!(monto>0)){ toast("Poné un monto válido","bad"); return; }
       const obj={id:a?a.id:uid(),fecha:($("ap_f").value?$("ap_f").value+"T12:00:00.000Z":new Date().toISOString()),
@@ -3329,10 +3352,27 @@ async function viewConcesiones(v){
       ${pend.map(d=>`<tr><td class="selcol"><span class="selcirc" data-pay="${d.id}" title="Marcar como pagada"></span></td><td>${fmtDate(d.fecha)}</td><td>${esc(d.desc)}</td><td>${esc(d.proveedor||"—")}</td><td class="num">${d.cant}</td><td class="num" style="font-weight:700">${money(d.monto)}</td></tr>`).join("")||`<tr><td colspan="6"><div class="empty">No hay deudas pendientes.</div></td></tr>`}
     </tbody></table></div></div></div>
     ${pagadas.length?`<div class="card" style="margin-top:16px"><div class="card-h"><h3>Pagadas</h3></div><div class="card-b flush"><div class="tbl-wrap"><table>
-      <thead><tr><th>Fecha pago</th><th>Producto</th><th class="num">Monto</th><th>Método</th></tr></thead><tbody>
-      ${pagadas.map(d=>`<tr><td>${d.paidFecha?fmtDate(d.paidFecha):"—"}</td><td>${esc(d.desc)}</td><td class="num">${money(d.monto)}</td><td><span class="badge ok">${PAY_LABEL[d.metodoPago]||d.metodoPago||"—"}</span></td></tr>`).join("")}
+      <thead><tr><th>Fecha pago</th><th>Producto</th><th class="num">Monto</th><th>Método</th><th></th></tr></thead><tbody>
+      ${pagadas.map(d=>`<tr><td>${d.paidFecha?fmtDate(d.paidFecha):"—"}</td><td>${esc(d.desc)}</td><td class="num">${money(d.monto)}</td><td><span class="badge ok">${PAY_LABEL[d.metodoPago]||d.metodoPago||"—"}</span></td><td class="right"><button class="btn sm gray" data-edc="${d.id}">Editar</button> <button class="rm" data-delc="${d.id}">×</button></td></tr>`).join("")}
     </tbody></table></div></div></div>`:""}`;
   v.querySelectorAll("[data-pay]").forEach(n=>n.onclick=()=>pagarConcesion(deudas.find(d=>d.id===n.dataset.pay)));
+  v.querySelectorAll("[data-edc]").forEach(b=>b.onclick=()=>editConcesionModal(deudas.find(d=>d.id===b.dataset.edc)));
+  v.querySelectorAll("[data-delc]").forEach(b=>b.onclick=async()=>{ const d=deudas.find(x=>x.id===b.dataset.delc); if(confirm(`¿Borrar el pago de concesión "${d.desc}" por ${money(d.monto)}? Se va a la papelera.`)){ await trashDel("concesiones",d.id); await refreshState(); toast("Enviado a la papelera","ok"); go("concesiones"); } });
+}
+function editConcesionModal(d){
+  if(!d) return;
+  modal("Editar pago de concesión",`
+    <div class="field"><label>Producto</label><input value="${esc(d.desc)}" disabled></div>
+    <div class="row2">
+      <div class="field"><label>Monto</label><input id="ec_m" inputmode="decimal" value="${d.monto||0}"></div>
+      <div class="field"><label>Método de pago</label><select id="ec_met">${["efectivo","tarjeta","transferencia"].map(k=>`<option value="${k}" ${d.metodoPago===k?"selected":""}>${PAY_LABEL[k]}</option>`).join("")}</select></div>
+    </div>
+    <div class="field"><label>Fecha de pago</label><input type="date" id="ec_f" value="${(d.paidFecha||d.fecha||"").slice(0,10)}"></div>
+    <div class="mini">Editar acá no reajusta automáticamente un movimiento de caja ya registrado.</div>
+  `,[
+    {label:"Borrar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Borrar este pago de concesión? Se va a la papelera.")){ await trashDel("concesiones",d.id); await refreshState(); close(); toast("Enviado a la papelera","ok"); go("concesiones"); } }},
+    {label:"Guardar",cls:"btn",fn:async close=>{ d.monto=parseNum($("ec_m").value)||0; d.metodoPago=$("ec_met").value; d.paidFecha=($("ec_f").value?$("ec_f").value+"T12:00:00.000Z":d.paidFecha); d.caja=(d.metodoPago==="efectivo"?"fisica":null); await DB.put("concesiones",d); await refreshState(); close(); toast("Pago actualizado","ok"); go("concesiones"); }}
+  ]);
 }
 function pagarConcesion(deuda){
   if(!deuda) return;
@@ -3354,6 +3394,21 @@ function pagarConcesion(deuda){
     await DB.put("concesiones",deuda); await refreshState(); close(); toast("Deuda saldada · "+PAY_LABEL[met],"ok"); go("concesiones");
   }}]);
   setTimeout(()=>{ document.querySelectorAll("#cpMet [data-cm]").forEach(n=>n.onclick=()=>{ met=n.dataset.cm; document.querySelectorAll("#cpMet .pm").forEach(x=>x.classList.remove("sel")); n.classList.add("sel"); const el=$("cpNote"); if(el) el.textContent=met==="efectivo"?"Sale de la caja física (egreso de efectivo).":"No afecta la caja física (pago electrónico)."; }); },40);
+}
+function STORE_LABEL(s){ return ({expenses:"Gasto",purchases:"Compra",aportes:"Aporte",activos:"Activo fijo",concesiones:"Concesión",products:"Producto",combos:"Combo",suppliers:"Proveedor",inversiones:"Inversión",perdidas:"Pérdida",sales:"Venta",ajustes:"Ajuste"})[s]||s; }
+async function viewPapelera(v){
+  if(APP.user.rol!=="propietario"){ v.innerHTML=`<div class="help">Solo los propietarios pueden acceder a la papelera.</div>`; return; }
+  const items=(await DB.all("papelera")).sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
+  v.innerHTML=`
+    <div class="help">Todo lo que borrás en el sistema queda acá. Podés <b>restaurarlo</b> o <b>eliminarlo definitivamente</b>. Solo los propietarios tienen acceso.</div>
+    <div class="toolbar"><div class="mini">${items.length} elemento${items.length!==1?"s":""} en la papelera</div><div style="flex:1"></div>${items.length?`<button class="btn danger sm" id="trashEmpty">Vaciar papelera</button>`:""}</div>
+    <div class="card"><div class="card-b flush"><div class="tbl-wrap"><table>
+      <thead><tr><th>Borrado</th><th>Tipo</th><th>Detalle</th><th>Por</th><th></th></tr></thead><tbody>
+      ${items.map(t=>`<tr><td class="mini">${t.fecha?fmtDateTime(t.fecha):"—"}</td><td><span class="badge cel">${STORE_LABEL(t.store)}</span></td><td>${esc(t.label||"")}</td><td class="mini">${esc(userName(t.usuario))}</td><td class="right"><button class="btn sm" data-restore="${t.id}">Restaurar</button> <button class="btn sm danger" data-perm="${t.id}">Eliminar</button></td></tr>`).join("")||`<tr><td colspan="5"><div class="empty">La papelera está vacía.</div></td></tr>`}
+    </tbody></table></div></div></div>`;
+  v.querySelectorAll("[data-restore]").forEach(b=>b.onclick=async()=>{ const t=items.find(x=>x.id===b.dataset.restore); if(!t)return; await DB.put(t.store, t.data); await DB.del("papelera", t.id); await refreshState(); toast("Restaurado","ok"); go("papelera"); });
+  v.querySelectorAll("[data-perm]").forEach(b=>b.onclick=async()=>{ const t=items.find(x=>x.id===b.dataset.perm); if(!t)return; if(confirm("¿Eliminar este elemento DEFINITIVAMENTE? No se va a poder recuperar.")){ await DB.del("papelera", t.id); await refreshState(); toast("Eliminado definitivamente","ok"); go("papelera"); } });
+  if($("trashEmpty")) $("trashEmpty").onclick=async()=>{ if(confirm("¿Vaciar TODA la papelera? Se eliminan definitivamente todos los elementos y no se pueden recuperar.")){ for(const t of items) await DB.del("papelera", t.id); await refreshState(); toast("Papelera vaciada","ok"); go("papelera"); } };
 }
 async function viewTrazabilidad(v){
   if(APP.user.rol!=="propietario"){ v.innerHTML=`<div class="help">Solo los <b>propietarios</b> pueden acceder a Trazabilidad.</div>`; return; }
@@ -3535,64 +3590,105 @@ function matrizMensual(titulo, filas){
   }).join("");
   return `<div class="card"><div class="card-b flush"><div class="tbl-wrap" style="overflow:auto"><table style="font-size:12.5px;white-space:nowrap;min-width:900px">${head}${rows}</table></div></div></div>`;
 }
+function isoWeek(d){ d=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())); const day=(d.getUTCDay()+6)%7; d.setUTCDate(d.getUTCDate()-day+3); const first=new Date(Date.UTC(d.getUTCFullYear(),0,4)); return 1+Math.round(((d-first)/86400000-3+((first.getUTCDay()+6)%7))/7); }
+function svgBars(data, opt){
+  opt=opt||{}; const W=opt.width||700, H=opt.height||230, bottom=42, left=10, top=18;
+  const max=Math.max(1,...data.map(d=>+d.value||0)); const n=data.length||1; const bw=(W-left*2)/n; const col=opt.color||"#FF5A1F";
+  let out="";
+  data.forEach((d,i)=>{ const val=+d.value||0; const h=max>0?(val/max)*(H-bottom-top):0; const x=left+i*bw, y=H-bottom-h;
+    out+=`<rect x="${(x+bw*0.12).toFixed(1)}" y="${y.toFixed(1)}" width="${(bw*0.76).toFixed(1)}" height="${Math.max(0,h).toFixed(1)}" rx="3" fill="${col}"><title>${esc(d.label)}: ${money(val)}</title></rect>`;
+    const tk=(d.tick!==undefined?d.tick:d.label); if(tk) out+=`<text x="${(x+bw*0.5).toFixed(1)}" y="${H-bottom+15}" text-anchor="middle" font-size="${opt.small?9:11}" fill="#777">${esc(tk)}</text>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:100%;height:auto"><line x1="${left}" y1="${H-bottom}" x2="${W-left}" y2="${H-bottom}" stroke="#e2ddd5"/>${out}</svg>`;
+}
 async function viewRepGeneral(v){
   const sales=(await DB.all("sales")).filter(s=>!s.anulada);
   const expenses=await DB.all("expenses"), purchases=await DB.all("purchases");
-  const today=todayStr();
-  v.innerHTML=`
-    <div class="toolbar"><div class="field" style="margin:0"><label>Desde</label><input type="date" id="rg_d1" value="${today.slice(0,8)+'01'}"></div>
-    <div class="field" style="margin:0"><label>Hasta</label><input type="date" id="rg_d2" value="${today}"></div></div>
-    <div id="rg_out"></div>`;
+  const CAT_COLORS=["#FF5A1F","#75AADB","#27AE60","#8E44AD","#F5A623","#16A085","#E74C3C","#2E86DE","#E67E22","#9B59B6","#1ABC9C","#95A5A6"];
   const COLM={efectivo:"#27AE60",tarjeta:"#2E86DE",transferencia:"#F5A623",mixto:"#8E44AD",debito:"#16A085",credito:"#E74C3C",fiado:"#95A5A6"};
+  let modo="semana"; const hoy=new Date();
+  function fISO2(d){ return d.toISOString().slice(0,10); }
+  function rango(){
+    if(modo==="semana"){ const d=new Date(hoy); const dow=(d.getDay()+6)%7; const lun=new Date(d); lun.setDate(d.getDate()-dow); const dom=new Date(lun); dom.setDate(lun.getDate()+6); return [fISO2(lun),fISO2(dom)]; }
+    if(modo==="mes"){ const a=hoy.getFullYear(),m=hoy.getMonth(); return [fISO2(new Date(a,m,1)), fISO2(new Date(a,m+1,0))]; }
+    if(modo==="anio"){ const a=hoy.getFullYear(); return [a+"-01-01", a+"-12-31"]; }
+    return [$("rg_d1").value, $("rg_d2").value];
+  }
+  v.innerHTML=`
+    <div id="rgModos" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <button class="btn sm" data-modo="semana">Semana actual</button>
+      <button class="btn sm gray" data-modo="mes">Mes actual</button>
+      <button class="btn sm gray" data-modo="anio">Año actual</button>
+      <button class="btn sm gray" data-modo="rango">Seleccionar período</button>
+    </div>
+    <div id="rgRange" style="display:none" class="toolbar">
+      <div class="field" style="margin:0"><label>Desde</label><input type="date" id="rg_d1" value="${todayStr().slice(0,8)}01"></div>
+      <div class="field" style="margin:0"><label>Hasta</label><input type="date" id="rg_d2" value="${todayStr()}"></div>
+    </div>
+    <div id="rg_out"></div>`;
   const render=()=>{
-    const d1=$("rg_d1").value, d2=$("rg_d2").value;
+    const [d1,d2]=rango();
     const inR=f=>{ const dd=String(f||"").slice(0,10); return dd>=d1 && dd<=d2; };
     const sv=sales.filter(s=>inR(s.fecha)), ex=expenses.filter(e=>inR(e.fecha));
     const ventas=sv.reduce((a,s)=>a+s.total,0), cmv=sv.reduce((a,s)=>a+(s.costoTotal||0),0);
     const margen=ventas-cmv, gastos=ex.reduce((a,e)=>a+e.monto,0), neto=margen-gastos;
-    const nV=sv.length, ticket=nV?ventas/nV:0;
+    const nV=sv.length;
     const porMet={}; sv.forEach(s=>{ (s.pagos&&s.pagos.length?s.pagos:[{metodo:s.metodoPago,monto:s.total}]).forEach(p=>{ porMet[p.metodo]=(porMet[p.metodo]||0)+p.monto; }); });
     const totPag=Object.values(porMet).reduce((a,b)=>a+b,0)||1;
     const segs=Object.entries(porMet).map(([k,val])=>({label:PAY_LABEL[k]||k,value:val,color:COLM[k]||"#888"})).filter(s=>s.value>0);
     const prodMap={}; sv.forEach(s=>{ (s.stockMov||[]).forEach(m=>{ prodMap[m.productId]=(prodMap[m.productId]||0)+m.cant; }); });
     const tops=Object.entries(prodMap).map(([id,cant])=>{ const p=APP.products.find(x=>x.id===id); return {nombre:p?p.descripcion:"(borrado)",cant}; }).sort((a,b)=>b.cant-a.cant).slice(0,10);
-    const pc=purchases.filter(c=>inR(c.fecha)); const pedido={}, pagado={};
-    pc.forEach(c=>{ const nom=c.proveedorNombre||c.proveedor||"—"; const t=purchaseTotal(c); pedido[nom]=(pedido[nom]||0)+t; if(c.formaPago!=="credito"||c.pagada) pagado[nom]=(pagado[nom]||0)+t; });
-    const topPed=Object.entries(pedido).sort((a,b)=>b[1]-a[1]).slice(0,8), topPag=Object.entries(pagado).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    const pc=purchases.filter(c=>inR(c.fecha)); const pedido={};
+    pc.forEach(c=>{ const nom=c.proveedorNombre||c.proveedor||"—"; pedido[nom]=(pedido[nom]||0)+purchaseTotal(c); });
+    const topPed=Object.entries(pedido).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    const catMap={}; sv.forEach(s=>{ (s.items||[]).forEach(it=>{ let cat="Sin categoría"; if(it.refId){ const p=APP.products.find(x=>x.id===it.refId); if(p&&p.categoria) cat=p.categoria; } catMap[cat]=(catMap[cat]||0)+(+it.precioUnit||0)*(+it.cant||0); }); });
+    const catSegs=Object.entries(catMap).sort((a,b)=>b[1]-a[1]).map(([k,val],i)=>({label:k,value:val,color:CAT_COLORS[i%CAT_COLORS.length]})).filter(s=>s.value>0);
+    const catTot=catSegs.reduce((a,s)=>a+s.value,0)||1;
+    let barsData=[], barTitle="";
+    if(modo==="semana"){ barTitle="Ventas por día"; const DN=["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"]; const base=new Date(d1+"T00:00:00");
+      for(let i=0;i<7;i++){ const dd=new Date(base); dd.setDate(base.getDate()+i); const key=fISO2(dd); const val=sv.filter(s=>String(s.fecha).slice(0,10)===key).reduce((a,s)=>a+s.total,0); barsData.push({label:DN[i]+" "+dd.getDate(), tick:DN[i], value:val}); }
+    } else if(modo==="mes"){ barTitle="Ventas por semana del año"; const wk={};
+      sv.forEach(s=>{ const w=isoWeek(new Date(String(s.fecha).slice(0,10)+"T12:00:00")); wk[w]=(wk[w]||0)+s.total; });
+      barsData=Object.entries(wk).sort((a,b)=>a[0]-b[0]).map(([w,val])=>({label:"Semana "+w, tick:"S"+w, value:val}));
+    } else if(modo==="anio"){ barTitle="Ventas por mes"; const MN=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]; const mm=Array(12).fill(0);
+      sv.forEach(s=>{ const m=+String(s.fecha).slice(5,7)-1; if(m>=0&&m<12) mm[m]+=s.total; }); barsData=mm.map((val,i)=>({label:MN[i],tick:MN[i],value:val}));
+    } else { barTitle="Ventas por día"; const map={}; sv.forEach(s=>{ const k=String(s.fecha).slice(0,10); map[k]=(map[k]||0)+s.total; });
+      barsData=Object.entries(map).sort((a,b)=>a[0]<b[0]?-1:1).map(([k,val])=>({label:k, tick:k.slice(8,10)+"/"+k.slice(5,7), value:val})); }
+    const horas=Array.from({length:24},(_,h)=>({label:h+":00 hs", tick:(h%3===0?h+"h":""), value:0}));
+    sv.forEach(s=>{ const h=new Date(s.fecha).getHours(); if(h>=0&&h<24) horas[h].value+=s.total; });
     $("rg_out").innerHTML=`
+      <div class="mini" style="margin:-4px 0 10px">Período: <b>${d1}</b> a <b>${d2}</b></div>
       <div class="grid kpis">
         <div class="kpi cel"><div class="lab">Ventas</div><div class="val">${money(ventas)}</div><div class="sub">${nV} ventas</div></div>
-        <div class="kpi ok"><div class="lab">Margen bruto</div><div class="val" style="color:var(--ok)">${money(margen)}</div><div class="sub">${ventas?(margen/ventas*100).toFixed(1):0}% s/ ventas</div></div>
+        <div class="kpi ok"><div class="lab">Margen bruto</div><div class="val" style="color:var(--ok)">${money(margen)}</div><div class="sub">${ventas?(margen/ventas*100).toFixed(1):0}%</div></div>
         <div class="kpi bad"><div class="lab">Gastos</div><div class="val" style="color:var(--bad)">${money(gastos)}</div></div>
         <div class="kpi"><div class="lab">Resultado neto</div><div class="val" style="color:${neto>=0?'var(--ok)':'var(--bad)'}">${money(neto)}</div></div>
       </div>
-      <div class="grid kpis" style="margin-top:2px">
-        <div class="kpi"><div class="lab">Venta promedio</div><div class="val">${money(ticket)}</div><div class="sub">por ticket</div></div>
-        <div class="kpi"><div class="lab">CMV</div><div class="val">${money(cmv)}</div><div class="sub">costo mercadería vendida</div></div>
-        <div class="kpi"><div class="lab">Nº de ventas</div><div class="val">${nV}</div></div>
+      <div class="card" style="margin-top:14px"><div class="card-h"><h3>${barTitle}</h3></div><div class="card-b">${barsData.length?svgBars(barsData,{color:"#FF5A1F",small:(modo==="anio"||modo==="rango")}):`<div class="empty">Sin ventas en el período.</div>`}</div></div>
+      <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;align-items:start">
+        <div class="card"><div class="card-h"><h3>Ventas por categoría</h3></div><div class="card-b" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;justify-content:center">
+          ${catSegs.length?svgDonut(catSegs):`<div class="empty">Sin datos de categoría en el período.</div>`}
+          <table style="flex:1;min-width:160px"><tbody>${catSegs.map(s=>`<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${s.color};margin-right:7px"></span>${esc(s.label)}</td><td class="num">${money(s.value)}</td><td class="num mini">${(s.value/catTot*100).toFixed(0)}%</td></tr>`).join("")}</tbody></table>
+        </div></div>
+        <div class="card"><div class="card-h"><h3>Medios de pago</h3></div><div class="card-b" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;justify-content:center">
+          ${segs.length?svgDonut(segs):`<div class="empty">Sin ventas.</div>`}
+          <table style="flex:1;min-width:160px"><tbody>${segs.map(s=>`<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${s.color};margin-right:7px"></span>${esc(s.label)}</td><td class="num">${money(s.value)}</td><td class="num mini">${(s.value/totPag*100).toFixed(0)}%</td></tr>`).join("")}</tbody></table>
+        </div></div>
       </div>
       <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;align-items:start">
-        <div class="card"><div class="card-h"><h3>Medios de pago</h3></div><div class="card-b" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;justify-content:center">
-          ${segs.length?svgDonut(segs):`<div class="empty">Sin ventas en el período.</div>`}
-          <table style="flex:1;min-width:170px"><tbody>${segs.map(s=>`<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${s.color};margin-right:7px"></span>${esc(s.label)}</td><td class="num">${money(s.value)}</td><td class="num mini">${(s.value/totPag*100).toFixed(0)}%</td></tr>`).join("")}</tbody></table>
-        </div></div>
-        <div class="card"><div class="card-h"><h3>Productos más vendidos</h3></div><div class="card-b flush"><div class="tbl-wrap"><table>
-          <thead><tr><th>Producto</th><th class="num">Unidades</th></tr></thead><tbody>
+        <div class="card"><div class="card-h"><h3>Productos más vendidos</h3></div><div class="card-b flush"><div class="tbl-wrap"><table><thead><tr><th>Producto</th><th class="num">Unidades</th></tr></thead><tbody>
           ${tops.map(t=>`<tr><td>${esc(t.nombre)}</td><td class="num" style="font-weight:700">${t.cant}</td></tr>`).join("")||`<tr><td colspan="2"><div class="empty">Sin ventas.</div></td></tr>`}
         </tbody></table></div></div></div>
+        <div class="card"><div class="card-h"><h3>Proveedores a los que más compramos</h3></div><div class="card-b flush"><div class="tbl-wrap"><table><thead><tr><th>Proveedor</th><th class="num">Comprado</th></tr></thead><tbody>
+          ${topPed.map(([n,val])=>`<tr><td>${esc(n)}</td><td class="num" style="font-weight:700">${money(val)}</td></tr>`).join("")||`<tr><td colspan="2"><div class="empty">Sin compras.</div></td></tr>`}
+        </tbody></table></div></div></div>
       </div>
-      <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;align-items:start">
-        <div class="card"><div class="card-h"><h3>Proveedores a los que más compramos</h3></div><div class="card-b flush"><div class="tbl-wrap"><table>
-          <thead><tr><th>Proveedor</th><th class="num">Comprado</th></tr></thead><tbody>
-          ${topPed.map(([n,val])=>`<tr><td>${esc(n)}</td><td class="num" style="font-weight:700">${money(val)}</td></tr>`).join("")||`<tr><td colspan="2"><div class="empty">Sin compras en el período.</div></td></tr>`}
-        </tbody></table></div></div></div>
-        <div class="card"><div class="card-h"><h3>Proveedores a los que más pagamos</h3></div><div class="card-b flush"><div class="tbl-wrap"><table>
-          <thead><tr><th>Proveedor</th><th class="num">Pagado</th></tr></thead><tbody>
-          ${topPag.map(([n,val])=>`<tr><td>${esc(n)}</td><td class="num" style="font-weight:700">${money(val)}</td></tr>`).join("")||`<tr><td colspan="2"><div class="empty">Sin pagos en el período.</div></td></tr>`}
-        </tbody></table></div></div></div>
-      </div>`;
+      <div class="card" style="margin-top:16px"><div class="card-h"><h3>Ventas por horario</h3></div><div class="card-b"><div class="mini" style="margin-bottom:8px">Identificá las horas pico de tu negocio.</div>${svgBars(horas,{color:"#75AADB",height:270,small:true})}</div></div>`;
   };
-  $("rg_d1").onchange=render; $("rg_d2").onchange=render; render();
+  const setModo=(m)=>{ modo=m; document.querySelectorAll("#rgModos [data-modo]").forEach(b=>b.className="btn sm"+(b.dataset.modo===m?"":" gray")); $("rgRange").style.display=(m==="rango")?"flex":"none"; render(); };
+  document.querySelectorAll("#rgModos [data-modo]").forEach(b=>b.onclick=()=>setModo(b.dataset.modo));
+  $("rg_d1").onchange=render; $("rg_d2").onchange=render;
+  setModo("semana");
 }
 async function viewRepFlujo(v){
   const sales=(await DB.all("sales")).filter(s=>!s.anulada);
