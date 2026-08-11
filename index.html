@@ -429,6 +429,16 @@ const fmtDate = iso => new Date(iso).toLocaleDateString("es-AR",{day:"2-digit",m
 const sameDay = (iso,day) => iso && iso.slice(0,10)===day;
 
 function mesLabel(ym){ const M=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]; if(!ym) return ""; const y=ym.slice(0,4),mm=+ym.slice(5,7); return (M[mm-1]||ym)+" "+y; }
+function auditStamp(rec){ if(!rec)return rec; rec.editadoPor=(APP.user?APP.user.id:null); rec.editadoEn=new Date().toISOString(); rec.historial=(rec.historial||[]); rec.historial.push({accion:"Editó",usuario:rec.editadoPor,fecha:rec.editadoEn}); return rec; }
+function verDetalle(titulo, campos, rec){
+  let a=`<div style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">`;
+  a+=`<div class="mini"><b>Creado por:</b> ${rec.usuario?esc(userName(rec.usuario)):"—"}${rec.fechaRegistro?" \u00b7 "+fmtDateTime(rec.fechaRegistro):(rec.fecha?" \u00b7 "+fmtDate(rec.fecha):"")}</div>`;
+  if(rec.editadoPor) a+=`<div class="mini"><b>Última edición:</b> ${esc(userName(rec.editadoPor))}${rec.editadoEn?" \u00b7 "+fmtDateTime(rec.editadoEn):""}</div>`;
+  else a+=`<div class="mini" style="color:#999">Sin ediciones registradas.</div>`;
+  if(rec.historial&&rec.historial.length){ a+=`<div class="mini" style="margin-top:8px"><b>Historial de cambios:</b></div>`+rec.historial.slice().reverse().map(x=>`<div class="mini" style="color:#666">\u00b7 ${esc(x.accion)} — ${esc(userName(x.usuario))} \u00b7 ${fmtDateTime(x.fecha)}</div>`).join(""); }
+  a+=`</div>`;
+  modal(titulo, campos.filter(c=>c).map(([l,val])=>`<div class="mini" style="padding:2px 0"><b>${esc(l)}:</b> ${esc(String(val==null?"—":val))}</div>`).join("")+a, [{label:"Cerrar",cls:"btn gray",fn:c=>c()}]);
+}
 function _autoCap(el){
   const v=el.value; if(!v) return;
   const nv=v.replace(/(^|\s)([\wáéíóúüñ])/g,(m,p1,p2)=>p1+p2.toUpperCase());
@@ -1977,7 +1987,8 @@ async function viewCompras(v){
       <td class="num">${money(purchaseTotal(c))}</td>
       <td>${c.formaPago==="credito"?(c.pagada?'<span class="badge ok">crédito · pagada</span>':'<span class="badge warn">crédito · a pagar</span>'):'<span class="badge cel">contado</span>'}</td>
       <td class="mini">${esc(userName(c.usuario))}</td>
-      <td class="right"><button class="btn sm gray" data-editp="${c.id}">Editar</button></td></tr>`;}).join("")||`<tr><td colspan="8"><div class="empty">Sin compras para este filtro.</div></td></tr>`;
+      <td class="right"><button class="btn sm gray" data-vdp="${c.id}">Ver</button> <button class="btn sm gray" data-editp="${c.id}">Editar</button></td></tr>`;}).join("")||`<tr><td colspan="8"><div class="empty">Sin compras para este filtro.</div></td></tr>`;
+    $("compBody").querySelectorAll("[data-vdp]").forEach(b=>b.onclick=()=>{const c=purchases.find(x=>x.id===b.dataset.vdp); verDetalle("Detalle de la compra",[["Proveedor",c.proveedorNombre||c.proveedor],["Total",money(purchaseTotal(c))],["Pago",c.formaPago==="credito"?(c.pagada?"Crédito · pagada":"Crédito · a pagar"):(c.concesion?"Concesión":"Contado")],["Fecha de ingreso",c.fecha?fmtDateTime(c.fecha):"—"]],c);});
     $("compBody").querySelectorAll("[data-editp]").forEach(b=>b.onclick=()=>{ const c=purchases.find(x=>x.id===b.dataset.editp); if(c.items&&c.items.length>0) editPurchaseModal(c); else editPurchaseSimple(c,suppliers); });
     $("compBody").querySelectorAll("[data-sel]").forEach(s=>s.onclick=()=>{ const id=s.dataset.sel; if(SEL.has(id))SEL.delete(id);else SEL.add(id); draw(); });
     const n=SEL.size; $("cSelCount").textContent=n?`· ${n} seleccionada${n>1?"s":""}`:""; $("cSelActions").style.display=n?"flex":"none";
@@ -2028,7 +2039,7 @@ function editPurchaseSimple(c, suppliers){
       c.total=monto; c.subtotal=monto; c.iva=0; c.envio=0;
       c.formaPago=forma; c.vencimiento=($("ep_venc").value?$("ep_venc").value+"T12:00:00.000Z":null);
       c.pagada=($("ep_pag").value==="si"); c.caja = forma==="contado"?"fisica":null;
-      await DB.put("purchases",c); await refreshState(); close(); toast("Compra actualizada","ok"); go("compras");
+      auditStamp(c); await DB.put("purchases",c); await refreshState(); close(); toast("Compra actualizada","ok"); go("compras");
     }}
   ]);
 }
@@ -2568,10 +2579,11 @@ async function viewGastos(v){
     const L=gfilter();
     const tot=L.reduce((a,e)=>a+(+e.monto||0),0), fij=L.filter(e=>(e.tipo||"fijo")!=="variable").reduce((a,e)=>a+(+e.monto||0),0);
     $("gkTotal").textContent=money(tot); $("gkFijos").textContent=money(fij); $("gkVar").textContent=money(tot-fij); $("gkCount").textContent=L.length;
-    $("gastBody").innerHTML=L.map(e=>{const on=GSEL.has(e.id);return `<tr class="${on?'selrow':''}"><td class="selcol"><span class="selcirc ${on?'on':''}" data-sel="${e.id}"></span></td><td class="mini">${e.fechaRegistro?fmtDateTime(e.fechaRegistro):"—"}</td><td>${fmtDate(e.fecha)}</td><td><span class="badge cel">${esc(e.categoria)}</span></td><td>${e.tipo==="variable"?'<span class="badge warn">Variable</span>':'<span class="badge ok">Fijo</span>'}</td><td>${esc(e.descripcion)}</td><td class="num">${money(e.monto)}</td><td class="mini">${esc(userName(e.usuario))}</td><td class="right"><button class="btn sm gray" data-edx="${e.id}">Editar</button> <button class="rm" data-del="${e.id}">×</button></td></tr>`;}).join("")||`<tr><td colspan="9"><div class="empty">Sin gastos para este filtro.</div></td></tr>`;
+    $("gastBody").innerHTML=L.map(e=>{const on=GSEL.has(e.id);return `<tr class="${on?'selrow':''}"><td class="selcol"><span class="selcirc ${on?'on':''}" data-sel="${e.id}"></span></td><td class="mini">${e.fechaRegistro?fmtDateTime(e.fechaRegistro):"—"}</td><td>${fmtDate(e.fecha)}</td><td><span class="badge cel">${esc(e.categoria)}</span></td><td>${e.tipo==="variable"?'<span class="badge warn">Variable</span>':'<span class="badge ok">Fijo</span>'}</td><td>${esc(e.descripcion)}</td><td class="num">${money(e.monto)}</td><td class="mini">${esc(userName(e.usuario))}</td><td class="right"><button class="btn sm gray" data-vdx="${e.id}">Ver</button> <button class="btn sm gray" data-edx="${e.id}">Editar</button> <button class="rm" data-del="${e.id}">×</button></td></tr>`;}).join("")||`<tr><td colspan="9"><div class="empty">Sin gastos para este filtro.</div></td></tr>`;
     const n=GSEL.size; $("gSelCount").textContent=n?`· ${n} seleccionado${n>1?"s":""}`:""; $("gSelActions").style.display=n?"flex":"none";
     $("gSelAll").classList.toggle("on", L.length>0 && L.every(e=>GSEL.has(e.id)));
     $("gastBody").querySelectorAll("[data-sel]").forEach(s=>s.onclick=()=>{const id=s.dataset.sel; if(GSEL.has(id))GSEL.delete(id);else GSEL.add(id); gdraw();});
+    $("gastBody").querySelectorAll("[data-vdx]").forEach(b=>b.onclick=()=>{const e=exp.find(x=>x.id===b.dataset.vdx); verDetalle("Detalle del gasto",[["Categoría",e.categoria],["Tipo",e.tipo==="variable"?"Variable":"Fijo"],["Descripción",e.descripcion],["Monto",money(e.monto)],["Fecha de ingreso",fmtDate(e.fecha)]],e);});
     $("gastBody").querySelectorAll("[data-edx]").forEach(b=>b.onclick=()=>editExpenseModal(exp.find(x=>x.id===b.dataset.edx)));
     $("gastBody").querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{if(confirm("¿Eliminar gasto?")){await trashDel("expenses",b.dataset.del);await refreshState();go("gastos");}});
   }
@@ -2624,7 +2636,7 @@ function editExpenseModal(e){
     {label:"Guardar",cls:"btn",fn:async close=>{
       const monto=parseNum($("eg_monto").value); if(!(monto>0)){ toast("Poné un monto válido","bad"); return; }
       e.fecha=$("eg_f").value||e.fecha; e.categoria=$("eg_cat").value; e.tipo=$("eg_tipo").value; e.monto=monto; e.descripcion=$("eg_desc").value.trim();
-      await DB.put("expenses",e); await refreshState(); close(); toast("Gasto actualizado","ok"); go("gastos");
+      auditStamp(e); await DB.put("expenses",e); await refreshState(); close(); toast("Gasto actualizado","ok"); go("gastos");
     }}
   ]);
 }
@@ -3232,10 +3244,11 @@ async function viewActivos(v){
         <td class="num">${a.vidaUtil?a.vidaUtil+" años":"—"}</td>
         <td class="num">${a.costo?money(a.costo):"—"}</td>
         <td class="mini">${a.fecha?new Date(a.fecha).toLocaleDateString("es-AR"):"—"}</td>
-        <td class="right"><button class="btn sm gray" data-ed="${a.id}">Editar</button> <button class="btn sm gray" data-del="${a.id}">✕</button></td>
+        <td class="right"><button class="btn sm gray" data-vdac="${a.id}">Ver</button> <button class="btn sm gray" data-ed="${a.id}">Editar</button> <button class="btn sm gray" data-del="${a.id}">✕</button></td>
       </tr>`).join("")||`<tr><td colspan="8"><div class="empty">Todavía no hay activos cargados.</div></td></tr>`}</tbody>
     </table></div></div></div>`;
   $("addAct").onclick=()=>activoModal(null);
+  v.querySelectorAll("[data-vdac]").forEach(n=>n.onclick=()=>{const a=list.find(x=>x.id===n.dataset.vdac); verDetalle("Detalle del activo",[["Concepto",a.concepto],["Cantidad",a.cantidad],["Propiedad",a.propiedad],["Categoría",a.categoria],["Vida útil",a.vidaUtil?a.vidaUtil+" años":"—"],["Costo",money(a.costo)]],a);});
   v.querySelectorAll("[data-ed]").forEach(n=>n.onclick=()=>activoModal(list.find(a=>a.id===n.dataset.ed)));
   v.querySelectorAll("[data-del]").forEach(n=>n.onclick=async()=>{ const a=list.find(x=>x.id===n.dataset.del); if(confirm(`¿Borrar el activo "${a.concepto}"?`)){ await trashDel("activos",a.id); await refreshState(); toast("Activo borrado","ok"); go("activos"); } });
 }
@@ -3259,7 +3272,10 @@ function activoModal(a){
     const c=$("ac_c").value.trim(); if(!c){ toast("Poné un concepto","bad"); return; }
     const obj={id:a?a.id:uid(),concepto:c,cantidad:parseNum($("ac_q").value)||1,propiedad:$("ac_p").value,
       categoria:$("ac_cat").value.trim(),vidaUtil:parseNum($("ac_v").value)||0,costo:parseNum($("ac_costo").value)||0,
-      fecha:($("ac_f").value?$("ac_f").value+"T12:00:00.000Z":new Date().toISOString())};
+      fecha:($("ac_f").value?$("ac_f").value+"T12:00:00.000Z":new Date().toISOString()),
+      usuario:a?a.usuario:APP.user.id,fechaRegistro:a?a.fechaRegistro:new Date().toISOString(),
+      historial:a?(a.historial||[]):[],editadoPor:a?a.editadoPor:null,editadoEn:a?a.editadoEn:null};
+    if(a) auditStamp(obj);
     await DB.put("activos",obj); await refreshState(); close(); toast(a?"Activo actualizado":"Activo agregado","ok"); go("activos");
   }}]);
 }
@@ -3294,7 +3310,8 @@ async function viewAportes(v){
       <td>${esc(a.proviene||"—")}</td>
       <td class="num" style="font-weight:700">${money(a.monto)}</td>
       <td><span class="badge ${a.motivo==="Aporte socios"?'ok':a.motivo==="Aporte terceros"?'warn':'cel'}">${esc(a.motivo||"—")}</span></td>
-      <td class="right"><button class="btn sm gray" data-ed="${a.id}">Editar</button></td></tr>`;}).join("")||`<tr><td colspan="7"><div class="empty">Todavía no hay aportes cargados.</div></td></tr>`;
+      <td class="right"><button class="btn sm gray" data-vda="${a.id}">Ver</button> <button class="btn sm gray" data-ed="${a.id}">Editar</button></td></tr>`;}).join("")||`<tr><td colspan="7"><div class="empty">Todavía no hay aportes cargados.</div></td></tr>`;
+    $("apBody").querySelectorAll("[data-vda]").forEach(b=>b.onclick=()=>{const a=list.find(x=>x.id===b.dataset.vda); verDetalle("Detalle del aporte",[["Descripción",a.descripcion],["Proviene de",a.proviene],["Monto",money(a.monto)],["Motivo",a.motivo],["Fecha",fmtDate(a.fecha)]],a);});
     $("apBody").querySelectorAll("[data-ed]").forEach(b=>b.onclick=()=>aporteModal(list.find(a=>a.id===b.dataset.ed)));
     $("apBody").querySelectorAll("[data-sel]").forEach(s=>s.onclick=()=>{const id=s.dataset.sel; if(SEL.has(id))SEL.delete(id);else SEL.add(id); draw();});
     const n=SEL.size; $("apSelCount").textContent=n?`· ${n} seleccionado${n>1?"s":""}`:""; $("apSelActions").style.display=n?"flex":"none";
@@ -3325,7 +3342,9 @@ function aporteModal(a){
       const monto=parseNum($("ap_m").value); if(!(monto>0)){ toast("Poné un monto válido","bad"); return; }
       const obj={id:a?a.id:uid(),fecha:($("ap_f").value?$("ap_f").value+"T12:00:00.000Z":new Date().toISOString()),
         descripcion:$("ap_d").value.trim(),proviene:$("ap_p").value.trim(),monto,motivo:$("ap_mot").value,
-        fechaRegistro:a?a.fechaRegistro:new Date().toISOString(),usuario:APP.user.id};
+        fechaRegistro:a?a.fechaRegistro:new Date().toISOString(),usuario:a?a.usuario:APP.user.id,
+        historial:a?(a.historial||[]):[],editadoPor:a?a.editadoPor:null,editadoEn:a?a.editadoEn:null};
+      if(a) auditStamp(obj);
       await DB.put("aportes",obj); await refreshState(); close(); toast(a?"Aporte actualizado":"Aporte registrado","ok"); go("aportes");
     }}
   ]);
@@ -3353,9 +3372,10 @@ async function viewConcesiones(v){
     </tbody></table></div></div></div>
     ${pagadas.length?`<div class="card" style="margin-top:16px"><div class="card-h"><h3>Pagadas</h3></div><div class="card-b flush"><div class="tbl-wrap"><table>
       <thead><tr><th>Fecha pago</th><th>Producto</th><th class="num">Monto</th><th>Método</th><th></th></tr></thead><tbody>
-      ${pagadas.map(d=>`<tr><td>${d.paidFecha?fmtDate(d.paidFecha):"—"}</td><td>${esc(d.desc)}</td><td class="num">${money(d.monto)}</td><td><span class="badge ok">${PAY_LABEL[d.metodoPago]||d.metodoPago||"—"}</span></td><td class="right"><button class="btn sm gray" data-edc="${d.id}">Editar</button> <button class="rm" data-delc="${d.id}">×</button></td></tr>`).join("")}
+      ${pagadas.map(d=>`<tr><td>${d.paidFecha?fmtDate(d.paidFecha):"—"}</td><td>${esc(d.desc)}</td><td class="num">${money(d.monto)}</td><td><span class="badge ok">${PAY_LABEL[d.metodoPago]||d.metodoPago||"—"}</span></td><td class="right"><button class="btn sm gray" data-vdc="${d.id}">Ver</button> <button class="btn sm gray" data-edc="${d.id}">Editar</button> <button class="rm" data-delc="${d.id}">×</button></td></tr>`).join("")}
     </tbody></table></div></div></div>`:""}`;
   v.querySelectorAll("[data-pay]").forEach(n=>n.onclick=()=>pagarConcesion(deudas.find(d=>d.id===n.dataset.pay)));
+  v.querySelectorAll("[data-vdc]").forEach(b=>b.onclick=()=>{const d=deudas.find(x=>x.id===b.dataset.vdc); verDetalle("Detalle de concesión",[["Producto",d.desc],["Proveedor",d.proveedor],["Cantidad",d.cant],["Monto",money(d.monto)],["Método",d.metodoPago?(PAY_LABEL[d.metodoPago]||d.metodoPago):"—"],["Fecha de pago",d.paidFecha?fmtDateTime(d.paidFecha):"—"]],d);});
   v.querySelectorAll("[data-edc]").forEach(b=>b.onclick=()=>editConcesionModal(deudas.find(d=>d.id===b.dataset.edc)));
   v.querySelectorAll("[data-delc]").forEach(b=>b.onclick=async()=>{ const d=deudas.find(x=>x.id===b.dataset.delc); if(confirm(`¿Borrar el pago de concesión "${d.desc}" por ${money(d.monto)}? Se va a la papelera.`)){ await trashDel("concesiones",d.id); await refreshState(); toast("Enviado a la papelera","ok"); go("concesiones"); } });
 }
@@ -3371,7 +3391,7 @@ function editConcesionModal(d){
     <div class="mini">Editar acá no reajusta automáticamente un movimiento de caja ya registrado.</div>
   `,[
     {label:"Borrar",cls:"btn danger sm",fn:async close=>{ if(confirm("¿Borrar este pago de concesión? Se va a la papelera.")){ await trashDel("concesiones",d.id); await refreshState(); close(); toast("Enviado a la papelera","ok"); go("concesiones"); } }},
-    {label:"Guardar",cls:"btn",fn:async close=>{ d.monto=parseNum($("ec_m").value)||0; d.metodoPago=$("ec_met").value; d.paidFecha=($("ec_f").value?$("ec_f").value+"T12:00:00.000Z":d.paidFecha); d.caja=(d.metodoPago==="efectivo"?"fisica":null); await DB.put("concesiones",d); await refreshState(); close(); toast("Pago actualizado","ok"); go("concesiones"); }}
+    {label:"Guardar",cls:"btn",fn:async close=>{ d.monto=parseNum($("ec_m").value)||0; d.metodoPago=$("ec_met").value; d.paidFecha=($("ec_f").value?$("ec_f").value+"T12:00:00.000Z":d.paidFecha); d.caja=(d.metodoPago==="efectivo"?"fisica":null); auditStamp(d); await DB.put("concesiones",d); await refreshState(); close(); toast("Pago actualizado","ok"); go("concesiones"); }}
   ]);
 }
 function pagarConcesion(deuda){
@@ -3591,13 +3611,15 @@ function matrizMensual(titulo, filas){
   return `<div class="card"><div class="card-b flush"><div class="tbl-wrap" style="overflow:auto"><table style="font-size:12.5px;white-space:nowrap;min-width:900px">${head}${rows}</table></div></div></div>`;
 }
 function isoWeek(d){ d=new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())); const day=(d.getUTCDay()+6)%7; d.setUTCDate(d.getUTCDate()-day+3); const first=new Date(Date.UTC(d.getUTCFullYear(),0,4)); return 1+Math.round(((d-first)/86400000-3+((first.getUTCDay()+6)%7))/7); }
+function shortMoney(n){ n=+n||0; var s=n<0?"-":""; n=Math.abs(n); if(n>=1e6) return s+"$"+(n/1e6).toFixed(n>=1e7?0:1).replace(".",",")+"M"; if(n>=1e3) return s+"$"+Math.round(n/1e3)+"k"; return s+"$"+Math.round(n); }
 function svgBars(data, opt){
-  opt=opt||{}; const W=opt.width||700, H=opt.height||230, bottom=42, left=10, top=18;
+  opt=opt||{}; const W=opt.width||700, H=opt.height||175, bottom=34, left=10, top=22;
   const max=Math.max(1,...data.map(d=>+d.value||0)); const n=data.length||1; const bw=(W-left*2)/n; const col=opt.color||"#FF5A1F";
   let out="";
   data.forEach((d,i)=>{ const val=+d.value||0; const h=max>0?(val/max)*(H-bottom-top):0; const x=left+i*bw, y=H-bottom-h;
-    out+=`<rect x="${(x+bw*0.12).toFixed(1)}" y="${y.toFixed(1)}" width="${(bw*0.76).toFixed(1)}" height="${Math.max(0,h).toFixed(1)}" rx="3" fill="${col}"><title>${esc(d.label)}: ${money(val)}</title></rect>`;
-    const tk=(d.tick!==undefined?d.tick:d.label); if(tk) out+=`<text x="${(x+bw*0.5).toFixed(1)}" y="${H-bottom+15}" text-anchor="middle" font-size="${opt.small?9:11}" fill="#777">${esc(tk)}</text>`;
+    out+=`<rect x="${(x+bw*0.14).toFixed(1)}" y="${y.toFixed(1)}" width="${(bw*0.72).toFixed(1)}" height="${Math.max(0,h).toFixed(1)}" rx="3" fill="${col}"><title>${esc(d.label)}: ${money(val)}</title></rect>`;
+    if(opt.showVal && val>0) out+=`<text x="${(x+bw*0.5).toFixed(1)}" y="${(y-4).toFixed(1)}" text-anchor="middle" font-size="${n>14?7:9}" fill="#444" font-weight="600">${shortMoney(val)}</text>`;
+    const tk=(d.tick!==undefined?d.tick:d.label); if(tk) out+=`<text x="${(x+bw*0.5).toFixed(1)}" y="${H-bottom+14}" text-anchor="middle" font-size="${opt.small?9:11}" fill="#777">${esc(tk)}</text>`;
   });
   return `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:100%;height:auto"><line x1="${left}" y1="${H-bottom}" x2="${W-left}" y2="${H-bottom}" stroke="#e2ddd5"/>${out}</svg>`;
 }
@@ -3664,7 +3686,7 @@ async function viewRepGeneral(v){
         <div class="kpi bad"><div class="lab">Gastos</div><div class="val" style="color:var(--bad)">${money(gastos)}</div></div>
         <div class="kpi"><div class="lab">Resultado neto</div><div class="val" style="color:${neto>=0?'var(--ok)':'var(--bad)'}">${money(neto)}</div></div>
       </div>
-      <div class="card" style="margin-top:14px"><div class="card-h"><h3>${barTitle}</h3></div><div class="card-b">${barsData.length?svgBars(barsData,{color:"#FF5A1F",small:(modo==="anio"||modo==="rango")}):`<div class="empty">Sin ventas en el período.</div>`}</div></div>
+      <div class="card" style="margin-top:14px"><div class="card-h"><h3>${barTitle}</h3></div><div class="card-b">${barsData.length?svgBars(barsData,{color:"#FF5A1F",small:(modo==="anio"||modo==="rango"),showVal:true,height:180}):`<div class="empty">Sin ventas en el período.</div>`}</div></div>
       <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;align-items:start">
         <div class="card"><div class="card-h"><h3>Ventas por categoría</h3></div><div class="card-b" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;justify-content:center">
           ${catSegs.length?svgDonut(catSegs):`<div class="empty">Sin datos de categoría en el período.</div>`}
@@ -3683,7 +3705,7 @@ async function viewRepGeneral(v){
           ${topPed.map(([n,val])=>`<tr><td>${esc(n)}</td><td class="num" style="font-weight:700">${money(val)}</td></tr>`).join("")||`<tr><td colspan="2"><div class="empty">Sin compras.</div></td></tr>`}
         </tbody></table></div></div></div>
       </div>
-      <div class="card" style="margin-top:16px"><div class="card-h"><h3>Ventas por horario</h3></div><div class="card-b"><div class="mini" style="margin-bottom:8px">Identificá las horas pico de tu negocio.</div>${svgBars(horas,{color:"#75AADB",height:270,small:true})}</div></div>`;
+      <div class="card" style="margin-top:16px"><div class="card-h"><h3>Ventas por horario</h3></div><div class="card-b"><div class="mini" style="margin-bottom:8px">Identificá las horas pico de tu negocio.</div>${svgBars(horas,{color:"#75AADB",height:200,small:true,showVal:true})}</div></div>`;
   };
   const setModo=(m)=>{ modo=m; document.querySelectorAll("#rgModos [data-modo]").forEach(b=>b.className="btn sm"+(b.dataset.modo===m?"":" gray")); $("rgRange").style.display=(m==="rango")?"flex":"none"; render(); };
   document.querySelectorAll("#rgModos [data-modo]").forEach(b=>b.onclick=()=>setModo(b.dataset.modo));
