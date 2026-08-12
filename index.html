@@ -309,6 +309,20 @@
   }
   .cloudbg{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--orange),var(--orange-d));padding:20px;z-index:70}
   #cloudOverlay{display:none}
+
+/* --- Mobile: más cómodo en celular --- */
+@media (max-width:760px){
+  .kpis{grid-template-columns:1fr 1fr !important;gap:10px !important}
+  .kpi .val{font-size:20px !important}
+  .grid[style*="1fr 1fr"]{grid-template-columns:1fr !important}
+  .card-b{padding:12px !important}
+  .btn{padding:11px 14px;font-size:15px}
+  .btn.sm{padding:8px 12px;font-size:13px}
+  #rgModos{position:sticky;top:0;z-index:5;background:var(--crema);padding:6px 0}
+  .tbl-wrap{overflow-x:auto}
+  table{font-size:13px}
+  .content{padding:12px !important}
+}
 </style>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
@@ -406,7 +420,7 @@ function scheduleRerender(){
   const mr=$("modalRoot"); if(mr && mr.innerHTML.trim()) return;        // no molestar si hay un cuadro abierto
   if(APP.page!=="dashboard" && APP.page!=="ventas") return;             // solo refrescamos en vivo las pantallas de monitoreo
   if(window._rr) clearTimeout(window._rr);
-  window._rr=setTimeout(()=>{ if(APP.user && (APP.page==="dashboard"||APP.page==="ventas")) go(APP.page); }, 600);
+  window._rr=setTimeout(()=>{ if(APP.user && (APP.page==="rep_general"||APP.page==="ventas")) go(APP.page); }, 600);
 }
 function waitFirst(keys,timeout){
   return new Promise(res=>{ const t0=Date.now(); const iv=setInterval(()=>{ if(keys.every(k=>_firstSnap[k]) || Date.now()-t0>(timeout||8000)){ clearInterval(iv); res(); } },120); });
@@ -472,7 +486,6 @@ const ROLE_LABEL = {propietario:"Propietario",gerente:"Gerente",supervisor:"Supe
 const PAY_LABEL = {efectivo:"Efectivo",tarjeta:"Tarjeta",transferencia:"Transferencia",debito:"Débito",credito:"Crédito",mixto:"Mixto",fiado:"Fiado"};
 const PAY_OPTIONS = ["efectivo","tarjeta","transferencia","credito","mixto"];
 const NAV = [
-  {id:"dashboard", label:"Panel", ic:"▦", roles:["propietario","gerente","supervisor"]},
   {id:"pos",       label:"Punto de venta", ic:"🛒", roles:["propietario","gerente","supervisor","cajero"]},
   {id:"inventario",label:"Catálogo", ic:"📦", roles:["propietario","gerente","supervisor","cajero"], grp:"productos"},
   {id:"combos",    label:"Promociones y Combos", ic:"🎁", roles:["propietario","gerente","supervisor"], grp:"productos"},
@@ -501,8 +514,12 @@ const NAV = [
   {id:"papelera",  label:"Papelera", ic:"🗑️", roles:["propietario"]},
 ];
 function isOwner(){ return APP.user && (APP.user.rol==="propietario"||APP.user.rol==="gerente"); }
+window.addEventListener("pagehide", autoCloseShift);
+window.addEventListener("beforeunload", autoCloseShift);
+function autoCloseShift(){ try{ if(soyDuenoTurno() && APP.openShift){ const s=Object.assign({},APP.openShift); s.cierre=new Date().toISOString(); s.estado="cerrado"; s.autoClose=true; if(typeof _db!=="undefined" && _db){ _db.collection("shifts").doc(String(s.id)).set(s); } else if(typeof DB!=="undefined"){ DB.put("shifts",s); } } }catch(e){} }
 function soyDuenoTurno(){ return !!(APP.openShift && APP.user && APP.openShift.usuario===APP.user.id); }
-function landingPage(){ return (APP.user && APP.user.rol==="cajero" && soyDuenoTurno()) ? "pos" : "dashboard"; }
+function esCelular(){ return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(navigator.userAgent||"") || window.innerWidth<=760; }
+function landingPage(){ return (APP.user && APP.user.rol==="cajero") ? "pos" : "rep_general"; }
 const BANK_METHODS=["transferencia","tarjeta","debito","credito"];
 function purchaseSubtotal(p){ if(p.items&&p.items.length) return p.items.reduce((a,i)=>a+i.cant*(+i.costoUnit||0),0); return (+p.subtotal||+p.total||0); }
 function purchaseTotal(p){ if(!(p.items&&p.items.length)) return Math.round((+p.total||+p.subtotal||0)*100)/100; const sub=purchaseSubtotal(p); return Math.round((sub*(1+(p.iva||0)/100)+(p.envio||0))*100)/100; }
@@ -652,7 +669,7 @@ async function doLogin(){
   $("login").classList.add("hidden"); $("app").classList.remove("hidden");
   await refreshState(); buildNav();
   if(APP.openShift && !APP.ownShift){ turnoAjenoModal(); return; }
-  if(APP.openShift){ go(landingPage()); } else { openingModal(); }
+  if(APP.openShift){ go(landingPage()); } else if(esCelular()){ go(landingPage()); } else { openingModal(); }
 }
 function turnoAjenoModal(){
   const dueno = userName(APP.openShift.usuario);
@@ -671,6 +688,7 @@ function turnoAjenoModal(){
   const x=$("mX"); if(x) x.style.display="none";
 }
 function openingModal(){
+  if(esCelular()){ go(landingPage()); toast("El turno se abre solo desde una computadora","bad"); return; }
   go(landingPage());
   modal("Apertura del día · ¿Cuánta plata hay?",`
     <div class="help">Antes de operar, declará el efectivo disponible en la caja. Esto abre el turno.</div>
@@ -1521,7 +1539,7 @@ function editProduct(p){
     </div>
     <datalist id="catlist"><option>Bebidas con Alcohol</option><option>Fumadores</option><option>Almacen</option><option>Lacteos</option><option>Desayuno/Merienda</option></datalist>
     <div class="row3">
-      <div class="field"><label>Costo prom.</label><input id="f_costo" inputmode="decimal" value="${p.costoProm}"></div>
+      <div class="field"><label>Costo</label><input id="f_costo" inputmode="decimal" value="${p.costoProm}"></div>
       <div class="field"><label>Precio venta</label><input id="f_precio" inputmode="decimal" value="${p.precio}"></div>
       <div class="field"><label>Stock actual</label><input id="f_stock" inputmode="decimal" value="${p.stock}"></div>
     </div>
@@ -1883,7 +1901,7 @@ async function viewVentas(v){
   const today=todayStr();
   const soloCajero = APP.user.rol==="cajero";
   v.innerHTML=`
-    ${soloCajero?`<div class="help">Mostrando los movimientos de las <b>últimas 24 horas</b>.</div>`:`<div class="toolbar">
+    ${soloCajero?`<div class="help">Mostrando únicamente las ventas de <b>tu turno actual</b>.</div>`:`<div class="toolbar">
       <div class="field" style="margin:0"><label>Desde</label><input type="date" id="vDesde" value="${today}"></div>
       <div class="field" style="margin:0"><label>Hasta</label><input type="date" id="vHasta" value="${today}"></div>
       <div class="field" style="margin:0"><label>&nbsp;</label><button class="btn" id="vGo">Ver</button></div>
@@ -1894,8 +1912,8 @@ async function viewVentas(v){
   async function run(){
     let sales;
     if(soloCajero){
-      const since=new Date(Date.now()-24*3600000).toISOString();
-      sales=(await DB.all("sales")).filter(s=>s.fecha>=since).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+      const tid = (APP.openShift && soyDuenoTurno()) ? APP.openShift.id : "__sinturno__";
+      sales=(await DB.all("sales")).filter(s=>s.turnoId===tid).sort((a,b)=>b.fecha.localeCompare(a.fecha));
     } else {
       const d1=$("vDesde").value,d2=$("vHasta").value;
       sales=(await DB.all("sales")).filter(s=>s.fecha.slice(0,10)>=d1&&s.fecha.slice(0,10)<=d2).sort((a,b)=>b.fecha.localeCompare(a.fecha));
@@ -2432,7 +2450,7 @@ async function viewCaja(v){
           <div class="mini" id="difF"></div>
           <div class="field" style="margin-top:10px"><label>Observaciones</label><input id="obsCaja" placeholder="Opcional"></div>`:''}
         </div>
-        ${soyDuenoTurno()?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn" id="doClose">Cerrar caja y turno</button><button class="btn gray" id="salidaBtn">＋ Salida de fondos (socios)</button></div>`:`<div class="help" style="margin-top:10px">La caja la maneja <b>${esc(userName(open.usuario))}</b>. Podés ver el estado, pero cerrar el turno, cobrar y registrar entradas/salidas lo hace quien abrió el turno.</div>`}
+        ${soyDuenoTurno()?`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn" id="doClose">Cerrar caja y turno</button></div>`:`<div class="help" style="margin-top:10px">La caja la maneja <b>${esc(userName(open.usuario))}</b>. Podés ver el estado, pero cerrar el turno, cobrar y registrar entradas/salidas lo hace quien abrió el turno.</div>`}
       </div></div>`;
   } else {
     block=`<div class="card" style="margin-bottom:16px"><div class="card-b"><div class="empty"><div class="big">💵</div>No hay turno abierto para cerrar.</div></div></div>`;
@@ -3625,12 +3643,13 @@ function svgBars(data, opt){
 }
 async function viewRepGeneral(v){
   const sales=(await DB.all("sales")).filter(s=>!s.anulada);
-  const expenses=await DB.all("expenses"), purchases=await DB.all("purchases");
+  const expenses=await DB.all("expenses"), purchases=await DB.all("purchases"), shifts=await DB.all("shifts");
   const CAT_COLORS=["#FF5A1F","#75AADB","#27AE60","#8E44AD","#F5A623","#16A085","#E74C3C","#2E86DE","#E67E22","#9B59B6","#1ABC9C","#95A5A6"];
   const COLM={efectivo:"#27AE60",tarjeta:"#2E86DE",transferencia:"#F5A623",mixto:"#8E44AD",debito:"#16A085",credito:"#E74C3C",fiado:"#95A5A6"};
-  let modo="semana"; const hoy=new Date();
+  let modo="hoy"; const hoy=new Date();
   function fISO2(d){ return d.toISOString().slice(0,10); }
   function rango(){
+    if(modo==="hoy"){ const t=todayStr(); return [t,t]; }
     if(modo==="semana"){ const d=new Date(hoy); const dow=(d.getDay()+6)%7; const lun=new Date(d); lun.setDate(d.getDate()-dow); const dom=new Date(lun); dom.setDate(lun.getDate()+6); return [fISO2(lun),fISO2(dom)]; }
     if(modo==="mes"){ const a=hoy.getFullYear(),m=hoy.getMonth(); return [fISO2(new Date(a,m,1)), fISO2(new Date(a,m+1,0))]; }
     if(modo==="anio"){ const a=hoy.getFullYear(); return [a+"-01-01", a+"-12-31"]; }
@@ -3638,7 +3657,8 @@ async function viewRepGeneral(v){
   }
   v.innerHTML=`
     <div id="rgModos" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-      <button class="btn sm" data-modo="semana">Semana actual</button>
+      <button class="btn sm" data-modo="hoy">Hoy</button>
+      <button class="btn sm gray" data-modo="semana">Semana actual</button>
       <button class="btn sm gray" data-modo="mes">Mes actual</button>
       <button class="btn sm gray" data-modo="anio">Año actual</button>
       <button class="btn sm gray" data-modo="rango">Seleccionar período</button>
@@ -3676,6 +3696,9 @@ async function viewRepGeneral(v){
       sv.forEach(s=>{ const m=+String(s.fecha).slice(5,7)-1; if(m>=0&&m<12) mm[m]+=s.total; }); barsData=mm.map((val,i)=>({label:MN[i],tick:MN[i],value:val}));
     } else { barTitle="Ventas por día"; const map={}; sv.forEach(s=>{ const k=String(s.fecha).slice(0,10); map[k]=(map[k]||0)+s.total; });
       barsData=Object.entries(map).sort((a,b)=>a[0]<b[0]?-1:1).map(([k,val])=>({label:k, tick:k.slice(8,10)+"/"+k.slice(5,7), value:val})); }
+    let horasAb=0; const _p1=new Date(d1+"T00:00:00").getTime(), _p2=new Date(d2+"T23:59:59").getTime();
+    shifts.forEach(s=>{ if(!s.apertura)return; const ini=new Date(s.apertura).getTime(); const fin=s.cierre?new Date(s.cierre).getTime():Date.now(); const a=Math.max(ini,_p1), b=Math.min(fin,_p2); if(b>a) horasAb+=(b-a)/3600000; });
+    const factHora = horasAb>0 ? ventas/horasAb : 0;
     const horas=Array.from({length:24},(_,h)=>({label:h+":00 hs", tick:(h%3===0?h+"h":""), value:0}));
     sv.forEach(s=>{ const h=new Date(s.fecha).getHours(); if(h>=0&&h<24) horas[h].value+=s.total; });
     $("rg_out").innerHTML=`
@@ -3686,6 +3709,10 @@ async function viewRepGeneral(v){
         <div class="kpi bad"><div class="lab">Gastos</div><div class="val" style="color:var(--bad)">${money(gastos)}</div></div>
         <div class="kpi"><div class="lab">Resultado neto</div><div class="val" style="color:${neto>=0?'var(--ok)':'var(--bad)'}">${money(neto)}</div></div>
       </div>
+      <div class="card" style="margin-top:12px"><div class="card-b" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <div><div class="mini" style="color:#888">Facturación por hora abierta</div><div style="font-size:26px;font-weight:800;color:var(--orange)">${money(factHora)}<span style="font-size:13px;color:#888;font-weight:500"> /hora</span></div></div>
+        <div class="mini" style="text-align:right">${horasAb.toFixed(1)} horas abiertas en el período<br>${money(ventas)} facturado · ${nV} ventas</div>
+      </div></div>
       <div class="card" style="margin-top:14px"><div class="card-h"><h3>${barTitle}</h3></div><div class="card-b">${barsData.length?svgBars(barsData,{color:"#FF5A1F",small:(modo==="anio"||modo==="rango"),showVal:true,height:180}):`<div class="empty">Sin ventas en el período.</div>`}</div></div>
       <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;margin-top:16px;align-items:start">
         <div class="card"><div class="card-h"><h3>Ventas por categoría</h3></div><div class="card-b" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;justify-content:center">
@@ -3710,7 +3737,7 @@ async function viewRepGeneral(v){
   const setModo=(m)=>{ modo=m; document.querySelectorAll("#rgModos [data-modo]").forEach(b=>b.className="btn sm"+(b.dataset.modo===m?"":" gray")); $("rgRange").style.display=(m==="rango")?"flex":"none"; render(); };
   document.querySelectorAll("#rgModos [data-modo]").forEach(b=>b.onclick=()=>setModo(b.dataset.modo));
   $("rg_d1").onchange=render; $("rg_d2").onchange=render;
-  setModo("semana");
+  setModo("hoy");
 }
 async function viewRepFlujo(v){
   const sales=(await DB.all("sales")).filter(s=>!s.anulada);
@@ -3890,7 +3917,7 @@ async function viewBackup(v){
     try{
       const data=JSON.parse(await f.text());
       for(const s of DB.STORES){ if(Array.isArray(data[s])){ await DB.clear(s); for(const item of data[s]) await DB.put(s,item); } }
-      toast("Datos importados a la nube","ok"); await refreshState(); buildNav(); go("dashboard");
+      toast("Datos importados a la nube","ok"); await refreshState(); buildNav(); go("rep_general");
     }catch(e){ toast("Archivo inválido","bad"); }
   };
   const _DELPASS="Palomos123";
