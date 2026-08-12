@@ -4048,12 +4048,12 @@ window.addEventListener("offline",()=>updateSyncBadge());
 let FB_CONFIG=null;
 try{ FB_CONFIG=JSON.parse(localStorage.getItem("tp_fbconfig")||"null"); }catch(e){}
 const HARDCODED_CONFIG = {
-  apiKey: "AIzaSyBjRDLQXEzP-o3gx7a4-OhW_gXKj8_SDWs",
-  authDomain: "tres-y-punto.firebaseapp.com",
-  projectId: "tres-y-punto",
-  storageBucket: "tres-y-punto.firebasestorage.app",
-  messagingSenderId: "17089626870",
-  appId: "1:17089626870:web:0620e5f2f1108e233f22d7"
+  apiKey: "AIzaSyD6_eErxtw3JQ8IIyM4dt7w34DKIEZhKFQ",
+  authDomain: "tresypunto-6d7f9.firebaseapp.com",
+  projectId: "tresypunto-6d7f9",
+  storageBucket: "tresypunto-6d7f9.firebasestorage.app",
+  messagingSenderId: "347703832991",
+  appId: "1:347703832991:web:da808bca134f2818030daa"
 };
 // La config fija SIEMPRE gana: así todos los equipos usan el mismo proyecto y se ignora cualquier config vieja guardada en el dispositivo.
 if(HARDCODED_CONFIG){ FB_CONFIG=HARDCODED_CONFIG; try{ localStorage.setItem("tp_fbconfig", JSON.stringify(HARDCODED_CONFIG)); }catch(e){} }
