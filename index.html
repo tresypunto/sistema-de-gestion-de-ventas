@@ -4067,7 +4067,8 @@ if(HARDCODED_CONFIG){ FB_CONFIG=HARDCODED_CONFIG; try{ localStorage.setItem("tp_
   if(!FB_CONFIG){ showConfigScreen(); return; }
   try{ firebase.initializeApp(FB_CONFIG); }catch(e){ /* ya inicializada */ }
   _auth=firebase.auth(); _db=firebase.firestore();
-  try{ await _db.enablePersistence({synchronizeTabs:true}); }catch(e){ /* multipestaña o no soportado: sigue online */ }
+  /* Persistencia offline DESACTIVADA: escribe siempre directo al servidor (evita que las escrituras queden encoladas/"pending"). */
+  try{ await _db.clearPersistence(); }catch(e){ /* no habia cache que limpiar */ }
   _auth.onAuthStateChanged(async user=>{
     if(!user){ showAuthScreen(); return; }
     hideOverlays();
