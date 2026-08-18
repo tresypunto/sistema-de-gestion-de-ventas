@@ -611,12 +611,17 @@ async function seedIfEmpty(){
     {nombre:"Santiago",pin:"1111",rol:"cajero"},
     {nombre:"Facundo",pin:"1111",rol:"cajero"},
   ];
+  const uidU = n => "u_"+String(n||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9]/g,"");
   const _meta = await DB.all("meta"); const _noDemo=_meta.some(m=>m.id==="noDemoSeed");
-  const users = await DB.all("users");
+  let users = await DB.all("users");
+  // Limpiar usuarios duplicados (mismo nombre + rol): deja uno solo
+  const _seen={}, _dupes=[];
+  for(const u of users){ const k=(u.nombre||"").trim().toLowerCase()+"|"+(u.rol||""); if(_seen[k]) _dupes.push(u); else _seen[k]=u; }
+  if(_dupes.length){ for(const d of _dupes) await DB.del("users",d.id); users=await DB.all("users"); }
   const legacy = users.length===2 && users.some(u=>u.nombre==="Gerente") && users.some(u=>u.nombre==="Cajero/a");
   if(users.length===0 || legacy){
     if(legacy){ for(const u of users) await DB.del("users",u.id); }
-    for(const u of DEFAULT_USERS) await DB.put("users",{id:uid(),...u});
+    for(const u of DEFAULT_USERS) await DB.put("users",{id:uidU(u.nombre),...u});
   }
   const prods = await DB.all("products");
   if(prods.length===0 && !_noDemo){
