@@ -542,6 +542,7 @@ const NAV = [
   {id:"rep_balance",   label:"Balance", ic:"⚖️", roles:["propietario","gerente"], grp:"reportes"},
   {id:"equipo",    label:"Mi equipo", ic:"🫂", roles:["propietario","gerente"]},
   {id:"usuarios",  label:"Usuarios", ic:"👥", roles:["propietario","gerente"]},
+  {id:"backupmov", label:"Backup de movimientos", ic:"🗃️", roles:["propietario","gerente"]},
   {id:"backup",    label:"Respaldo", ic:"💾", roles:["propietario","gerente","supervisor"]},
   {id:"papelera",  label:"Papelera", ic:"🗑️", roles:["propietario"]},
 ];
@@ -837,7 +838,7 @@ async function go(page){
   const ni=NAV.find(n=>n.id===page);
   if(ni && APP.user && !ni.roles.includes(APP.user.rol)) page=landingPage();
   APP.page=page; setActive();
-  const titles={dashboard:"Panel",pos:"Punto de venta",inventario:"Catálogo",combos:"Promociones y Combos",compras:"Compras",ajustes:"Ajuste de inventario",auditoria:"Auditoría de Stock",perdidas:"Pérdidas",trazabilidad:"Trazabilidad",cuentas:"Cuentas por pagar",proveedores:"Proveedores",ventas:"Historial de ventas",turnos:"Turnos",caja:"Cierre de caja",gastos:"Gastos",ctacte:"Cuenta corriente del equipo",inversiones:"Inversiones",activos:"Activos fijos",aportes:"Aporte de capital",concesiones:"Concesiones",papelera:"Papelera de reciclaje",rep_finanzas:"Reporte de Finanzas",rep_comercial:"Rendimiento comercial",rep_inventario:"Reporte de Inventario",rep_proveedores:"Gestión de proveedores",rep_flujo:"Flujo de fondos",rep_resultados:"Estado de resultados",rep_balance:"Balance",equipo:"Mi equipo",usuarios:"Usuarios",backup:"Respaldo de datos"};
+  const titles={dashboard:"Panel",pos:"Punto de venta",inventario:"Catálogo",combos:"Promociones y Combos",compras:"Compras",ajustes:"Ajuste de inventario",auditoria:"Auditoría de Stock",perdidas:"Pérdidas",trazabilidad:"Trazabilidad",cuentas:"Cuentas por pagar",proveedores:"Proveedores",ventas:"Historial de ventas",turnos:"Turnos",caja:"Cierre de caja",gastos:"Gastos",ctacte:"Cuenta corriente del equipo",inversiones:"Inversiones",activos:"Activos fijos",aportes:"Aporte de capital",concesiones:"Concesiones",backupmov:"Backup de movimientos",papelera:"Papelera de reciclaje",rep_finanzas:"Reporte de Finanzas",rep_comercial:"Rendimiento comercial",rep_inventario:"Reporte de Inventario",rep_proveedores:"Gestión de proveedores",rep_flujo:"Flujo de fondos",rep_resultados:"Estado de resultados",rep_balance:"Balance",equipo:"Mi equipo",usuarios:"Usuarios",backup:"Respaldo de datos"};
   $("pageTitle").textContent=titles[page]||"";
   window.__usersCache = await DB.all("users");
   await refreshState(); updateTurnoState();
@@ -862,6 +863,7 @@ async function go(page){
   if(page==="aportes")    return viewAportes(v);
   if(page==="concesiones") return viewConcesiones(v);
   if(page==="papelera")   return viewPapelera(v);
+  if(page==="backupmov")  return viewBackupMov(v);
   if(page==="inversiones")return viewInversiones(v);
   if(page==="rep_comercial") return viewRepGeneral(v);
   if(page==="rep_finanzas")  return viewRepFinanzas(v);
@@ -3813,6 +3815,102 @@ async function viewRepGeneral(v){
 }
 
 /* ===== REPORTE DE FINANZAS ===== */
+
+/* ===== BACKUP DE MOVIMIENTOS (importar ventas del sistema viejo, solo unidades) ===== */
+function parseHoraVieja(s){
+  s=String(s||"").trim();
+  const M={ene:0,feb:1,mar:2,abr:3,may:4,jun:5,jul:6,ago:7,sep:8,oct:9,nov:10,dic:11};
+  const m=s.match(/(\d{1,2})\/([A-Za-zñÑ]{3,})\/(\d{4})\s+(\d{1,2}):(\d{2})\s*([ap])\.?\s?m\.?/i);
+  if(!m) return null;
+  let d=+m[1], mon=M[m[2].slice(0,3).toLowerCase()], y=+m[3], hh=+m[4], mm=+m[5], ap=m[6].toLowerCase();
+  if(mon==null) return null;
+  if(ap==="p" && hh!==12) hh+=12; if(ap==="a" && hh===12) hh=0;
+  const dt=new Date(y,mon,d,hh,mm); return isNaN(dt)?null:dt.toISOString();
+}
+function parseMovFecha(v){
+  if(v==null||v==="") return null;
+  if(v instanceof Date && !isNaN(v)) return v.toISOString();
+  if(typeof v==="number" && v>1000){ const dt=new Date(Math.round((v-25569)*86400000)); return isNaN(dt)?null:dt.toISOString(); }
+  const vj=parseHoraVieja(v); if(vj) return vj;
+  const dt=new Date(String(v).replace(" ","T")); return isNaN(dt)?null:dt.toISOString();
+}
+function matchProduct(codigo, nombre){
+  const cod=String(codigo||"").trim();
+  let p=cod?APP.products.find(x=>String(x.codigo||"").trim()===cod):null;
+  if(!p && cod.indexOf("-")>=0){ const base=cod.split("-")[0]; p=APP.products.find(x=>String(x.codigo||"").split("-")[0]===base); }
+  if(!p && nombre){ const n=String(nombre).trim().toLowerCase(); p=APP.products.find(x=>String(x.descripcion||"").trim().toLowerCase()===n); }
+  return p;
+}
+function downloadMovTemplate(){
+  downloadXLSX("plantilla-movimientos.xlsx","Movimientos",[
+    ["Fecha y hora","Código","Producto","Cantidad"],
+    ["2026-02-24 21:40","7790895005794","Coca Cola PET 2500ml",1],
+    ["2026-02-24 21:41","7790314063824","Vino Toro Caja 1000ml",2],
+    ["2026-02-24 22:05","1234-abc","Sandwiches de Miga",3]
+  ]);
+}
+async function importMovimientos(){
+  const inp=document.createElement("input"); inp.type="file"; inp.accept=".xlsx,.xls,.csv"; inp.multiple=true;
+  inp.onchange=async()=>{
+    if(!inp.files||!inp.files.length) return;
+    let files=0,totalSales=0,totalUnits=0,nuevosProd=0,saltados=0;
+    toast("Importando movimientos… puede tardar unos segundos","ok");
+    for(const file of inp.files){
+      let rows; try{ rows=await fileToRows(file); }catch(e){ continue; }
+      if(!rows||rows.length<2) continue; files++;
+      const head=rows[0].map(x=>String(x||"").trim().toLowerCase());
+      const col=(...names)=>{ for(const n of names){ let i=head.findIndex(h=>h===n); if(i<0) i=head.findIndex(h=>h.indexOf(n)>=0); if(i>=0) return i; } return -1; };
+      const iF=col("fecha y hora","hora","fecha"), iC=col("código","codigo","cod"), iP=col("producto"), iQ=col("cantidad","cant"), iT=col("tipo"), iD=col("descripción de movi","descripcion de movi","venta"), iDep=col("departamento","categoría","categoria","rubro");
+      const grupos={};
+      for(let r=1;r<rows.length;r++){
+        const row=rows[r]; if(!row) continue;
+        if(iT>=0){ const tp=String(row[iT]||"").toLowerCase(); if(tp && tp.indexOf("salida")<0) continue; }
+        const fv=parseMovFecha(row[iF]); if(!fv){ saltados++; continue; }
+        let q=Math.abs(parseNum(row[iQ])); if(!q||isNaN(q)) q=1;
+        const cod=String(row[iC]||"").trim(), nom=String(row[iP]||"").trim(); if(!cod && !nom){ saltados++; continue; }
+        const dep=iDep>=0?String(row[iDep]||"").trim():"";
+        let p=matchProduct(cod,nom);
+        if(!p){ p={id:uid(),codigo:cod||("MOV-"+nom.slice(0,10)),descripcion:nom||"(sin nombre)",categoria:dep||"",subcategoria:"",costoProm:0,precio:0,stock:0,stockMin:0,stockMax:0,activo:true,_backup:true}; await DB.put("products",p); APP.products.push(p); nuevosProd++; }
+        const vt=iD>=0?String(row[iD]||""):""; const vm=vt.match(/#\s*(\d+)/); const vkey=(vm?vm[1]:("r"+r))+"|"+fv.slice(0,10);
+        if(!grupos[vkey]) grupos[vkey]={fecha:fv,mov:{}};
+        grupos[vkey].mov[p.id]=(grupos[vkey].mov[p.id]||0)+q;
+      }
+      for(const k in grupos){
+        const g=grupos[k]; const stockMov=Object.entries(g.mov).map(([productId,cant])=>({productId,cant}));
+        if(!stockMov.length) continue;
+        totalUnits+=stockMov.reduce((a,m)=>a+m.cant,0); totalSales++;
+        await DB.put("sales",{id:uid(),fecha:g.fecha,items:[],total:0,costoTotal:0,metodoPago:"backup",pagos:[],cliente:"",creditoUser:null,usuario:APP.user.id,turnoId:null,stockMov,anulada:false,_backup:true});
+      }
+    }
+    await refreshState();
+    toast(`Listo: ${files} archivo(s) · ${totalSales} ventas · ${totalUnits} unidades${nuevosProd?` · ${nuevosProd} productos nuevos`:""}${saltados?` · ${saltados} filas salteadas`:""}`,"ok");
+    go("backupmov");
+  };
+  inp.click();
+}
+async function viewBackupMov(v){
+  if(!(APP.user.rol==="propietario"||APP.user.rol==="gerente")){ v.innerHTML=`<div class="help">Solo propietarios o gerentes.</div>`; return; }
+  const sales=await DB.all("sales"); const bk=sales.filter(s=>s._backup);
+  const units=bk.reduce((a,s)=>a+(s.stockMov||[]).reduce((x,m)=>x+(m.cant||0),0),0);
+  const dias=new Set(bk.map(s=>String(s.fecha).slice(0,10))).size;
+  v.innerHTML=`
+    <div class="help">Subí acá los Excel de <b>movimientos del sistema anterior</b> (uno por día — podés seleccionar muchos a la vez). El sistema toma la <b>fecha, hora y cantidades vendidas</b> de cada producto y las suma a los reportes de <b>unidades</b> (más vendidos, ABC, por hora). <b>No incluye ingresos ni costos</b>: esos los cargás por separado.</div>
+    <div class="grid kpis">
+      <div class="kpi"><div class="lab">Tickets importados</div><div class="val">${bk.length}</div></div>
+      <div class="kpi"><div class="lab">Unidades cargadas</div><div class="val">${units}</div></div>
+      <div class="kpi"><div class="lab">Días cubiertos</div><div class="val">${dias}</div></div>
+    </div>
+    <div class="toolbar" style="margin-top:12px">
+      <button class="btn" id="impMov">Importar Excel (varios)</button>
+      <button class="btn gray" id="tplMov">Plantilla Excel</button>
+      ${bk.length?`<button class="btn danger gh" id="delMov">Borrar lo importado</button>`:""}
+    </div>
+    <div class="mini">Columnas que lee: <b>Fecha y hora</b> · <b>Código</b> · <b>Producto</b> · <b>Cantidad</b>. También reconoce el formato viejo (Hora, Código, Producto, Tipo, Cantidad) y agrupa por "Venta #".</div>`;
+  $("impMov").onclick=importMovimientos;
+  $("tplMov").onclick=downloadMovTemplate;
+  if($("delMov")) $("delMov").onclick=async()=>{ if(confirm(`¿Borrar los ${bk.length} movimientos importados? No toca tus ventas reales.`)){ for(const s of bk) await DB.del("sales",s.id); await refreshState(); toast("Movimientos importados borrados","ok"); go("backupmov"); } };
+}
+
 async function viewRepFinanzas(v){
   const sales=(await DB.all("sales")).filter(s=>!s.anulada);
   const expenses=await DB.all("expenses");
