@@ -2319,12 +2319,16 @@ function comboGrupoModal(c){
 async function viewVentas(v){
   const today=todayStr();
   const soloCajero = APP.user.rol==="cajero";
+  const nrm=t=>String(t||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim();
   v.innerHTML=`
-    ${soloCajero?`<div class="help">Mostrando únicamente las ventas de <b>tu turno actual</b>.</div>`:`<div class="toolbar">
+    ${soloCajero?`<div class="help">Mostrando únicamente las ventas de <b>tu turno actual</b>.</div>`:`<div class="toolbar" style="flex-wrap:wrap;gap:10px;align-items:flex-end">
+      <div class="field" style="margin:0"><label>📅 Día puntual</label><input type="date" id="vDia" value="${today}"></div>
       <div class="field" style="margin:0"><label>Desde</label><input type="date" id="vDesde" value="${today}"></div>
       <div class="field" style="margin:0"><label>Hasta</label><input type="date" id="vHasta" value="${today}"></div>
-      <div class="field" style="margin:0"><label>&nbsp;</label><button class="btn" id="vGo">Ver</button></div>
-    </div>`}
+      <div class="field" style="margin:0;min-width:200px"><label>🔎 Producto</label><input id="vProd" placeholder="Nombre o código…" autocomplete="off"></div>
+      <div class="field" style="margin:0"><label>&nbsp;</label><button class="btn" id="vGo">Ver</button> <button class="btn gray" id="vHoy">Hoy</button> <button class="btn gray" id="vTodo">Todo el historial</button></div>
+    </div>
+    <div class="mini" id="vResumen" style="margin:6px 0 10px"></div>`}
     <div class="card"><div class="card-b flush"><div class="tbl-wrap"><table>
       <thead><tr><th>Fecha y hora</th><th>Usuario</th><th class="num">Ítems</th><th class="num">Total</th><th>Pago</th><th>Estado</th><th></th></tr></thead>
       <tbody id="vBody"></tbody></table></div></div></div>`;
@@ -2334,8 +2338,13 @@ async function viewVentas(v){
       const tid = (APP.openShift && soyDuenoTurno()) ? APP.openShift.id : "__sinturno__";
       sales=(await DB.all("sales")).filter(s=>s.turnoId===tid).sort((a,b)=>b.fecha.localeCompare(a.fecha));
     } else {
-      const d1=$("vDesde").value,d2=$("vHasta").value;
-      sales=(await DB.all("sales")).filter(s=>diaAR(s.fecha).slice(0,10)>=d1&&diaAR(s.fecha).slice(0,10)<=d2).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+      let d1=$("vDesde").value,d2=$("vHasta").value; if(d1&&d2&&d1>d2){ const t=d1; d1=d2; d2=t; }
+      const q=nrm($("vProd").value);
+      sales=(await DB.all("sales")).filter(s=>{ const d=diaAR(s.fecha); if((d1&&d<d1)||(d2&&d>d2)) return false;
+        if(!q) return true; return (s.items||[]).some(it=>nrm(it.desc).includes(q)||nrm(it.codigo).includes(q)); }).sort((a,b)=>b.fecha.localeCompare(a.fecha));
+      const ok=sales.filter(s=>!s.anulada), tot=ok.reduce((a,s)=>a+(s.total||0),0);
+      let extra=""; if(q){ let u=0,m=0; ok.forEach(s=>(s.items||[]).forEach(it=>{ if(nrm(it.desc).includes(q)||nrm(it.codigo).includes(q)){ u+=(+it.cant||0); m+=(+it.cant||0)*(+it.precioUnit||0); } })); extra=` · de ese producto: <b>${Math.round(u*1000)/1000} u.</b> por <b>${money(m)}</b>`; }
+      $("vResumen").innerHTML=`${(!d1&&!d2)?"Todo el historial":d1===d2?fmtDate(d1):(d1?fmtDate(d1):"inicio")+" → "+(d2?fmtDate(d2):"hoy")}: <b>${ok.length}</b> venta${ok.length===1?"":"s"} · <b>${money(tot)}</b>${extra}`;
     }
     $("vBody").innerHTML=sales.map(s=>`<tr style="${s.anulada?'opacity:.55':''}">
       <td>${fmtDateTime(s.fecha)}</td><td>${esc(userName(s.usuario))}</td><td class="num">${s.items.length}</td>
@@ -2344,7 +2353,14 @@ async function viewVentas(v){
       <td class="right"><button class="btn sm gray" data-v="${s.id}">Ver</button></td></tr>`).join("")||`<tr><td colspan="7"><div class="empty">Sin ventas en el rango.</div></td></tr>`;
     $("vBody").querySelectorAll("[data-v]").forEach(b=>b.onclick=()=>ventaDetalle(sales.find(s=>s.id===b.dataset.v)));
   }
-  if($("vGo")) $("vGo").onclick=run;
+  if($("vGo")){
+    $("vGo").onclick=run;
+    $("vDia").onchange=()=>{ if($("vDia").value){ $("vDesde").value=$("vDia").value; $("vHasta").value=$("vDia").value; run(); } };
+    $("vDesde").onchange=$("vHasta").onchange=()=>{ $("vDia").value=($("vDesde").value===$("vHasta").value)?$("vDesde").value:""; run(); };
+    $("vProd").oninput=run;
+    $("vHoy").onclick=()=>{ $("vDia").value=$("vDesde").value=$("vHasta").value=todayStr(); $("vProd").value=""; run(); };
+    $("vTodo").onclick=()=>{ $("vDia").value=""; $("vDesde").value=""; $("vHasta").value=""; run(); };
+  }
   await run();
 }
 function ventaDetalle(s){
@@ -4779,14 +4795,14 @@ async function viewActivos(v){
     <div class="card"><div class="card-b flush"><div class="tbl-wrap"><table>
       <thead><tr><th>Concepto</th><th class="num">Cant.</th><th>Propiedad</th><th>Categoría</th><th class="num">Vida útil</th><th class="num">Costo</th><th>Fecha</th><th></th></tr></thead>
       <tbody>${list.map(a=>`<tr>
-        <td><b>${esc(a.concepto)}</b>${a.conCuotas?` <span class="badge warn">${a.cuotasN} cuota${a.cuotasN>1?"s":""}</span>`:""}</td>
+        <td><b>${esc(a.concepto)}</b>${a.venta?` <span class="badge ok">vendido · ${money(a.venta.monto)} · ${fmtDate(a.venta.fecha)}</span>`:""}${a.conCuotas?` <span class="badge warn">${a.cuotasN} cuota${a.cuotasN>1?"s":""}</span>`:""}</td>
         <td class="num">${a.cantidad||1}</td>
         <td>${esc(a.propiedad||"—")}</td>
         <td>${esc(a.categoria||"—")}</td>
         <td class="num">${a.vidaUtil?a.vidaUtil+" años":"—"}</td>
         <td class="num">${a.costo?money(a.costo):"—"}</td>
         <td class="mini">${a.fecha?new Date(a.fecha).toLocaleDateString("es-AR",{timeZone:TZ}):"—"}</td>
-        <td class="right"><button class="btn sm gray" data-vdac="${a.id}">Ver</button> <button class="btn sm gray" data-ed="${a.id}">Editar</button> <button class="btn sm gray" data-del="${a.id}">✕</button></td>
+        <td class="right"><button class="btn sm gray" data-vdac="${a.id}">Ver</button> <button class="btn sm gray" data-ed="${a.id}">Editar</button> <button class="btn sm gray" data-vend="${a.id}">${a.venta?"Venta":"Vender"}</button> <button class="btn sm gray" data-del="${a.id}">✕</button></td>
       </tr>`).join("")||`<tr><td colspan="8"><div class="empty">Todavía no hay activos cargados.</div></td></tr>`}</tbody>
     </table></div></div></div>
     <div class="card" style="margin-top:16px"><div class="card-h"><h3>Cuotas activos fijos</h3><span class="mini">${cuotas.length-cuotasPend.length} pagadas · ${cuotasPend.length} pendientes</span></div><div class="card-b flush"><div class="tbl-wrap"><table>
@@ -4807,6 +4823,15 @@ async function viewActivos(v){
     if(!confirm("¿Deshacer el pago de esta cuota? Vuelve a quedar pendiente.")) return;
     c.pagada=false; c.fechaPago=null; c.caja=null; c.turnoId=null; c.usuario=null;
     await DB.put("cuotasActivos",c); await refreshState(); toast("Pago deshecho","ok"); go("activos");
+  });
+  v.querySelectorAll("[data-vend]").forEach(n=>n.onclick=()=>{ const a=list.find(x=>x.id===n.dataset.vend); const vt=a.venta||{};
+    modal("Venta de activo · "+esc(a.concepto),`<div class="help">Registrá a cuánto vendiste el activo. Entra al <b>Flujo de fondos</b> (sección Inversiones) y a la caja del Balance, y deja de contar como activo propio.</div>
+      <div class="row2"><div class="field"><label>Fecha de venta</label><input type="date" id="av_f" value="${vt.fecha||todayStr()}"></div>
+      <div class="field"><label>Monto cobrado ($)</label><input id="av_m" inputmode="decimal" value="${vt.monto!=null?vt.monto:""}" placeholder="0"></div></div>
+      <div class="field"><label>Nota (opcional)</label><input id="av_n" value="${esc(vt.nota||"")}" placeholder="Ej: se lo vendimos a …"></div>`,
+      [{label:"Guardar venta",cls:"btn",fn:async close=>{ const monto=parseFloat(String($("av_m").value).replace(/\./g,"").replace(",","."))||0; const f=$("av_f").value; if(!f||monto<=0){ toast("Completá fecha y monto","bad"); return; }
+        a.venta={fecha:f,monto:Math.round(monto*100)/100,nota:$("av_n").value.trim()}; await DB.put("activos",a); close(); toast("Venta del activo registrada","ok"); go("activos"); }}]
+      .concat(a.venta?[{label:"Quitar venta",cls:"btn danger",fn:async close=>{ delete a.venta; await DB.put("activos",a); close(); toast("Venta quitada","ok"); go("activos"); }}]:[]));
   });
   v.querySelectorAll("[data-vdac]").forEach(n=>n.onclick=()=>{const a=list.find(x=>x.id===n.dataset.vdac); verDetalle("Detalle del activo",[["Concepto",a.concepto],["Cantidad",a.cantidad],["Propiedad",a.propiedad],["Categoría",a.categoria],["Vida útil",a.vidaUtil?a.vidaUtil+" años":"—"],["Costo",money(a.costo)]],a);});
   v.querySelectorAll("[data-ed]").forEach(n=>n.onclick=()=>activoModal(list.find(a=>a.id===n.dataset.ed)));
@@ -5564,13 +5589,13 @@ async function viewRepProveedores(v){
 async function viewRepFlujo(v){
   const sales=(await DB.all("sales")).filter(s=>!s.anulada);
   const expenses=expandExpenses(await DB.all("expenses")), purchases=await DB.all("purchases"), movs=await DB.all("movimientos"), inversiones=await DB.all("inversiones"), aportesArr=await DB.all("aportes"), activosArr=await DB.all("activos"), cuotasArr=await DB.all("cuotasActivos");
-  const years=_yearsData(sales,expenses,purchases,movs,inversiones,aportesArr,activosArr,cuotasArr.filter(c=>c.pagada).map(c=>({fecha:c.fechaPago})));
+  const years=_yearsData(sales,expenses,purchases,movs,inversiones,aportesArr,activosArr,activosArr.filter(a=>a.venta).map(a=>({fecha:a.venta.fecha})),cuotasArr.filter(c=>c.pagada).map(c=>({fecha:c.fechaPago})));
   v.innerHTML=`<div class="help">Flujo de fondos mensual (base <b>caja</b>: entradas y salidas reales de dinero). Ordenado por actividad. Filtrá el año y mirá los 12 meses uno al lado del otro.</div>
     <div class="toolbar"><div class="field" style="margin:0"><label>Año</label><select id="ff_y">${years.map(y=>`<option>${y}</option>`).join("")}</select></div></div><div id="ff_out"></div>`;
   const render=()=>{
     const Y=$("ff_y").value, mi=f=>_mesIdx(f,Y), z=()=>Array(12).fill(0);
-    const ventasEfe=z(), ventasEle=z(), entradas=z(), comprasPag=z(), gastosFijos=z(), manoObra=z(), gastosVar=z(), pagosProv=z(), salidas=z(), invers=z(), aportes=z(), activCapex=z();
-    sales.forEach(s=>{ const m=mi(s.fecha); if(m<0)return; (s.pagos&&s.pagos.length?s.pagos:[{metodo:s.metodoPago,monto:s.total}]).forEach(p=>{ if(p.metodo==="backup") return; if(p.metodo==="efectivo") ventasEfe[m]+=p.monto; else ventasEle[m]+=p.monto; }); });
+    const ventasTot=z(), ventaActivos=z(), entradas=z(), comprasPag=z(), gastosFijos=z(), manoObra=z(), gastosVar=z(), pagosProv=z(), salidas=z(), invers=z(), aportes=z(), activCapex=z();
+    sales.forEach(s=>{ const m=mi(s.fecha); if(m<0)return; (s.pagos&&s.pagos.length?s.pagos:[{metodo:s.metodoPago,monto:s.total}]).forEach(p=>{ if(p.metodo==="backup"||p.metodo==="credito") return; ventasTot[m]+=p.monto; }); });  /* cuenta corriente: la plata entra al liquidar (queda como entrada de caja) */
     movs.forEach(x=>{ const m=mi(x.fecha); if(m<0)return; if(x.tipo==="entrada") entradas[m]+=x.monto; else salidas[m]+=x.monto; });
     purchases.forEach(c=>{ if(c.concesion) return; if(c.formaPago==="contado"){ const m=mi(c.fecha); if(m>=0) comprasPag[m]+=(c.total||0); } else if(c.pagada){ const m=mi(c.paidFecha||c.fecha); if(m>=0) pagosProv[m]+=(c.total||0); } });
     expenses.forEach(e=>{ const m=mi(e.fecha); if(m<0)return; if(grupoGasto(e.categoria)==="Sueldos") manoObra[m]+=e.monto; else if(e.tipo==="fijo") gastosFijos[m]+=e.monto; else gastosVar[m]+=e.monto; });
@@ -5578,16 +5603,16 @@ async function viewRepFlujo(v){
     aportesArr.forEach(x=>{ const m=mi(x.fecha); if(m>=0) aportes[m]+=(x.monto||0); });
     activosArr.filter(a=>!a.conCuotas).forEach(a=>{ const m=mi(a.fecha); if(m>=0) activCapex[m]+=(+a.costo||0)*(+a.cantidad||1); });
     cuotasArr.filter(c=>c.pagada).forEach(c=>{ const m=mi(c.fechaPago); if(m>=0) activCapex[m]+=(+c.monto||0); });
-    const totIng=z().map((_,m)=>ventasEfe[m]+ventasEle[m]+entradas[m]);
+    activosArr.filter(a=>a.venta&&a.venta.fecha).forEach(a=>{ const m=mi(a.venta.fecha); if(m>=0) ventaActivos[m]+=(+a.venta.monto||0); });
+    const totIng=z().map((_,m)=>ventasTot[m]+entradas[m]);
     const totEgr=z().map((_,m)=>comprasPag[m]+gastosFijos[m]+manoObra[m]+gastosVar[m]+pagosProv[m]+salidas[m]);
     const flujoOp=z().map((_,m)=>totIng[m]-totEgr[m]);
-    const flujoNeto=z().map((_,m)=>flujoOp[m]-invers[m]-activCapex[m]+aportes[m]);
+    const flujoNeto=z().map((_,m)=>flujoOp[m]-invers[m]-activCapex[m]+ventaActivos[m]+aportes[m]);
     let ac=0; const acum=flujoNeto.map(x=>{ ac+=x; return ac; });
     const filas=[
       {tipo:"header",label:"Ingresos"},
-      {label:"Ventas en efectivo",data:ventasEfe},
-      {label:"Ventas tarjeta / transferencia",data:ventasEle},
-      {label:"Entradas de efectivo (caja)",data:entradas},
+      {label:"Ingresos por ventas",data:ventasTot},
+      {label:"Otras entradas de efectivo (caja)",data:entradas},
       {tipo:"total",label:"Total ingresos",data:totIng,color:"#1f8a48"},
       {tipo:"header",label:"Egresos operativos"},
       {label:"Compras de mercadería (contado)",data:comprasPag},
@@ -5601,6 +5626,7 @@ async function viewRepFlujo(v){
       {tipo:"header",label:"Inversiones"},
       {label:"Inversiones (acciones, cripto, plazo fijo…)",data:invers},
       {label:"Inversión en activos fijos (cuotas pagadas)",data:activCapex},
+      {label:"Venta de activos fijos",data:ventaActivos,color:"#1f8a48"},
       {tipo:"header",label:"Financiación"},
       {label:"Aportes de capital (socios / terceros)",data:aportes,color:"#1f8a48"},
       {tipo:"total",label:"Flujo neto del mes",data:flujoNeto},
@@ -5649,7 +5675,7 @@ async function viewRepBalance(v){
   const purchases=await DB.all("purchases"), inversiones=await DB.all("inversiones"), aportesArr=await DB.all("aportes"), activosArr=await DB.all("activos"), cuotasArr=await DB.all("cuotasActivos");
   const sales=(await DB.all("sales")).filter(s=>!s.anulada), expenses=await DB.all("expenses"), movs=await DB.all("movimientos");
   const aportesTot=aportesArr.reduce((a,x)=>a+(+x.monto||0),0);
-  const activFijos=activosArr.filter(a=>a.propiedad!=="Comodato").reduce((s,a)=>s+(+a.costo||0)*(+a.cantidad||1),0);
+  const activFijos=activosArr.filter(a=>a.propiedad!=="Comodato"&&!a.venta).reduce((s,a)=>s+(+a.costo||0)*(+a.cantidad||1),0);
   const invValor=products.reduce((a,p)=>a+(p.stock*(p.costoProm||0)),0);
   const invTotal=inversiones.reduce((a,x)=>a+(x.monto||0),0);
   const conces=await DB.all("concesiones");
@@ -5659,6 +5685,7 @@ async function viewRepBalance(v){
   sales.forEach(s=>{ (s.pagos&&s.pagos.length?s.pagos:[{metodo:s.metodoPago,monto:s.total}]).forEach(p=>{ if(p.metodo==="efectivo") efe+=p.monto; }); });
   movs.forEach(x=>{ if(x.tipo==="entrada") efe+=(x.monto||0); else efe-=(x.monto||0); });
   efe+=aportesTot;
+  efe+=activosArr.filter(a=>a.venta).reduce((s,a)=>s+(+a.venta.monto||0),0);
   efe-=activosArr.filter(a=>a.propiedad!=="Comodato"&&!a.conCuotas).reduce((s,a)=>s+(+a.costo||0)*(+a.cantidad||1),0)+cuotasArr.filter(c=>c.pagada).reduce((s,c)=>s+(+c.monto||0),0);
   expenses.forEach(e=>{ efe-=(e.monto||0); });
   purchases.forEach(c=>{ if(c.formaPago==="contado") efe-=(c.total||0); else if(c.pagada) efe-=(c.total||0); });
